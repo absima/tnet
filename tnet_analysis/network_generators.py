@@ -152,7 +152,7 @@ def generate_temporal_network_with_density_variation(tnet0, variation_type, sigm
     # Generate new temporal network
     new_tnet = np.zeros((T, N, N), dtype=int)
     for t in range(T):
-        new_tnet[t] = symmRandNetWithDiag(N, new_edge_counts[t], mode='nEdges')
+        new_tnet[t] = generate_symmetric_random_network_with_diag(N, new_edge_counts[t], flag='nEdges')
 
     return new_tnet
 
@@ -221,6 +221,24 @@ def generate_scale_free_network_with_diag(N, x, flag):
     adjacency_matrix : array, shape (N, N)
         Symmetric binary adjacency matrix with self-loops.
     """
+    def generateDegrees(N, k, gamma):
+        possibleDegrees = np.arange(1, N + 1)
+        p = possibleDegrees ** (-gamma)
+        p /= np.sum(p)  
+    
+        # saample degrees based on p
+        degrees = np.random.choice(possibleDegrees, size=N, p=p)
+    
+        # scaling with the target degree k
+        current_avg = np.mean(degrees)
+        adjustment_factor = k / current_avg
+        adjusted_degrees = np.round(degrees * adjustment_factor).astype(int)
+    
+        # avoid degree 0 
+        # adjusted_degrees = np.clip(adjusted_degrees, 1, N-1)
+    
+        return adjusted_degrees
+        
     if flag == 'degree':
         k = x
     elif flag == 'nEdges':
