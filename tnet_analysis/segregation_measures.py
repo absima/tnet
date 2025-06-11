@@ -225,7 +225,7 @@ def compute_neighborhood_memory(adjacency_matrices, lag=1):
     return score_percentile
     
 
-def compute_temporal_clustering(adjacency_matrices):
+def compute_classical_clustering(adjacency_matrices):
     """
     Compute average temporal clustering coefficient per node across snapshots.
 
@@ -269,4 +269,56 @@ def compute_temporal_clustering(adjacency_matrices):
     
     score_percentile = np.nanpercentile(clustering_scores, [5, 25, 50, 75, 95])
     return score_percentile
+    
+
+def compute_temporal_clustering(adjacency_matrices, delta=1):
+    """
+    Compute temporal clustering coefficient for each node based on time-respecting triangles.
+
+    Parameters
+    ----------
+    adjacency_matrices : array, shape (T, N, N)
+        Sequence of binary adjacency matrices (0/1).
+    delta : int
+        Maximum allowed time between events to form a temporal triangle.
+
+    Returns
+    -------
+    temporal_clustering : array, shape (N,)
+        Temporal clustering coefficient per node.
+    """
+    T, N, _ = adjacency_matrices.shape
+    temporal_clustering = np.zeros(N)
+    triangle_counts = np.zeros(N)
+    triplet_counts = np.zeros(N)
+
+    for t1 in range(T):
+        adj1 = adjacency_matrices[t1]
+
+        for i in range(N):
+            neighbors1 = np.where(adj1[i] > 0)[0]
+
+            for j in neighbors1:
+                for t2 in range(t1 + 1, min(t1 + delta + 1, T)):
+                    adj2 = adjacency_matrices[t2]
+                    neighbors2 = np.where(adj2[i] > 0)[0]
+
+                    for k in neighbors2:
+                        if k == j:
+                            continue
+                        # We have i→j at t1 and i→k at t2
+                        triplet_counts[i] += 1
+                        
+                        # Check if j and k are connected at any time between t1 and t2
+                        for t3 in range(t1 + 1, t2 + 1):
+                            adj3 = adjacency_matrices[t3]
+                            if adj3[j, k] > 0 or adj3[k, j] > 0:
+                                triangle_counts[i] += 1
+                                break
+
+    # Avoid division by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        temporal_clustering = np.where(triplet_counts > 0, triangle_counts / triplet_counts,  0.0)
+    tcl_percentile = np.nanpercentile(temporal_clustering, [5, 25, 50, 75, 95])
+    return tcl_percentile
     
