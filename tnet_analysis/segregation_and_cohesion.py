@@ -393,10 +393,11 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=10):
         else:
             diversity_scores[i] = 0.0
 
-    score_percentiles = np.nanpercentile(diversity_scores, [5, 25, 50, 75, 95]).tolist()
+    score_percentiles = np.nanpercentile(diversity_scores, [5, 25, 50, 75, 95])
+    return score_percentiles.tolist()
     
         
- def ComputeNodePersistence(tnet, confidence=0.95):
+def ComputeNodePersistence(tnet, confidence=0.95):
      """
      Compute node-level persistence scores and identify significantly persistent nodes.
 

@@ -1,4 +1,5 @@
 import numpy as np
+from .latency_measures import SetDiagonals, ComputeAverageDegree    
 
 # =========================================================
 # Dynamic functional connectivity (DFC) estimation
@@ -119,5 +120,6 @@ def BinarizeDFC(time_series, target_degree, window, lag):
 
     tnet0 = (fcs0 > threshold).astype(int)
     tnet1 = SetDiagonals(tnet0, 1)
+    
 
     return tnet1

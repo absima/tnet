@@ -142,6 +142,8 @@ def GenerateSymmetricSmallWorldNetwork(n_nodes, n_edges, rewire_prob=0.02, seed=
     return adj_matrix
 
 
+import numpy as np
+
 def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.5, a=0.1, alpha=0.5):
     """
     Create a symmetric scale-free-like random network with a full diagonal.
@@ -190,7 +192,7 @@ def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.
         pref_values = n_nodes - indices + 1
     elif model == 'sf_exponential':
         pref_values = np.exp(-a * (indices - 1))
-    elif model == 'sf_powerlaw' or model =='sf':
+    elif model == 'sf_powerlaw':
         pref_values = indices ** (-gamma)
     elif model == 'sf_hybrid':
         linear = n_nodes - indices + 1
@@ -211,7 +213,19 @@ def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.
 
     # Sample n_edges unique edges
     sampled_indices = np.random.choice(
-        len(possible_edges), size=n_edges, replace=Fal
+        len(possible_edges), size=n_edges, replace=False, p=edge_probs
+    )
+    sampled_edges = [possible_edges[i] for i in sampled_indices]
+
+    # Create symmetric adjacency matrix with diagonal filled
+    adj_matrix = np.zeros((n_nodes, n_nodes), dtype=int)
+    for i, j in sampled_edges:
+        adj_matrix[i, j] = 1
+        adj_matrix[j, i] = 1
+    np.fill_diagonal(adj_matrix, 1)
+
+    return adj_matrix
+
 
 
 
@@ -639,7 +653,7 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
     T, n_nodes, _ = np.shape(tnet)
 
     # Remove isolated nodes; work on the core, pad back later
-    tnet_core, n_core_nodes = trimIsolatedNodes(tnet)
+    tnet_core, n_core_nodes = TrimIsolatedNodes(tnet)
 
     # Tag groups
     sfsw_static = ['sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid', 'sw_static']

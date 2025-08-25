@@ -197,7 +197,7 @@ def RandomWalker(tnet, n_trials, return_fpt_matrix=False, seed=None):
             dmtx_trial[source] = first_hit
 
         all_dmtx[trial] = dmtx_trial
-        q6_array[trial] = MeanDistance(dmtx_trial, T + 1)  # penalty = T+1
+        q6_array[trial] = MeanLatencyMatrixAnalysis(dmtx_trial, T + 1)  # penalty = T+1
 
     mean_q6 = q6_array.mean(axis=0)
 
@@ -310,7 +310,7 @@ def ComputeTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None):
     T = tnet.shape[0]
     penalty = T + 1
 
-    avg_deg, std_deg = ComputeAvgDegree(tnet.copy())
+    avg_deg, std_deg = ComputeAverageDegree(tnet.copy())
 
     sdmtx = SmartWalker(tnet)
     smart_q6 = MeanLatencyMatrixAnalysis(sdmtx, penalty)

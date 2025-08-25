@@ -139,8 +139,8 @@ def ComputeDynamism(tnet):
     # If both snapshots empty => cosine = 1 on their mutual pair
     csim[np.outer(zero_norm, zero_norm)] = 1.0
     # Any pair involving an empty snapshot is set to 0 elsewhere
-    csim[zero_norm, ~zero_norm] = 0.0
-    csim[~zero_norm, zero_norm] = 0.0
+    csim[np.ix_(zero_norm, ~zero_norm)] = 0.0
+    csim[np.ix_(~zero_norm, zero_norm)] = 0.0
 
     # First superdiagonal: similarity between successive snapshots
     if T <= 1:
