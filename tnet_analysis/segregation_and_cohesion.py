@@ -340,7 +340,7 @@ def ComputePartnerStability(adjacency_matrices):
     return score_percentiles.tolist()
 
 
-def ComputePartnerDiversity(adjacency_matrices, window_size=10):
+def ComputePartnerDiversity(adjacency_matrices, window_size=None):
     """
     Compute partner diversity for each node using normalized entropy across temporal windows.
 
@@ -368,25 +368,40 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=10):
       log(# of distinct partners).
     - Nodes with no partners get diversity = 0.
     """
+    if window_size is None or window_size <= 0:
+        window_size = 1
+    
     T, N, _ = adjacency_matrices.shape
-    diversity_scores = np.zeros(N)
+    diversity_scores = np.zeros(N, dtype=float)
     n_windows = T // window_size if window_size > 0 else 1
 
     for i in range(N):
         neighbor_time_activity = {}
         for t in range(T):
             neighbors = np.where(adjacency_matrices[t, i] > 0)[0]
+            neighbors = neighbors[neighbors != i]
+            if neighbors.size == 0:
+                continue
+                
+            w = t // window_size     
             for j in neighbors:
                 if j not in neighbor_time_activity:
                     neighbor_time_activity[j] = set()
-                neighbor_time_activity[j].add(t // window_size)
+                neighbor_time_activity[j].add(w)
 
         if neighbor_time_activity:
             temporal_spans = np.array([
-                len(windows) / n_windows for windows in neighbor_time_activity.values()
-            ])
-            probs = temporal_spans / np.sum(temporal_spans)
+                len(windows) / n_windows for windows in neighbor_time_activity.values()],
+                dtype=float)
+            total = np.sum(temporal_spans)
+            if total <= 0:
+                diversity_scores[i] = 0.0
+                continue
+            probs = temporal_spans / total
             probs = probs[probs > 0]
+            if probs.size == 0:
+                diversity_scores[i] = 0.0
+                continue
             entropy = -np.sum(probs * np.log(probs))
             norm = np.log(len(probs))
             diversity_scores[i] = entropy / norm if norm > 0 else np.nan
@@ -395,6 +410,10 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=10):
 
     score_percentiles = np.nanpercentile(diversity_scores, [5, 25, 50, 75, 95])
     return score_percentiles.tolist()
+
+
+
+
     
         
 def ComputeNodePersistence(tnet, confidence=0.95):

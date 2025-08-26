@@ -1,4 +1,4 @@
-numpy
-networkx
-scikit-learn
-python-louvain
+numpy,
+Spicy,
+Scikit-learn,
+Warnings,

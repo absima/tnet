@@ -2,6 +2,9 @@ import numpy as np
 import warnings
 from scipy.stats import norm
 from sklearn.metrics import normalized_mutual_info_score
+
+
+
 def ComputeTemporalMutualInformation(adjacency_matrices):
     """
     Compute average normalized mutual information between consecutive adjacency snapshots,
