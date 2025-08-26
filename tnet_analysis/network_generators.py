@@ -30,18 +30,19 @@ def GenerateSymmetricRandomNetwork(n_nodes, n_edges):
         with `n_edges` undirected edges and a full diagonal of ones.
     """
     src, tgt = np.tril_indices(n_nodes, -1)  # lower-triangular indices
-    all_edges = np.column_stack((src, tgt))
-    np.random.shuffle(all_edges)
+    # all_edges = np.column_stack((src, tgt))
+    selected_edges = np.random.permutation(np.column_stack((src, tgt)))[:n_edges]
+    # np.random.shuffle(all_edges)
 
-    selected_src, selected_tgt = all_edges[:n_edges].T
-    adj_matrix = np.zeros((n_nodes, n_nodes))
-    adj_matrix[selected_src, selected_tgt] = 1.0
+    selected_src, selected_tgt = selected_edges.T
+    adj_matrix = np.zeros((n_nodes, n_nodes), dtype=int)
+    adj_matrix[selected_src, selected_tgt] = 1
 
     # Make symmetric
     adj_matrix = adj_matrix + adj_matrix.T
 
     # Fill diagonal with ones
-    np.fill_diagonal(adj_matrix, 1.0)
+    np.fill_diagonal(adj_matrix, 1)
 
     return adj_matrix
 
@@ -229,7 +230,7 @@ def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.
 
 
 
-def GenerateSymmetricNetwork(n_nodes, n_edges, kind):
+def GenerateSymmetricNetwork(n_nodes, n_edges, kind, seed=None):
     """
     Generate a symmetric network with a full diagonal, based on the specified model type.
 
@@ -469,13 +470,12 @@ def GenerateTnetWithDensityVariation(tnet0, variation_type, sigma=0, scale=1):
 
     # Generate new temporal network
     new_tnet = np.zeros((T, N, N), dtype=int)
-    for t in range(T):
-        new_tnet[t] = generate_symmetric_random_network_with_diag(N, new_edge_counts[t], flag='nEdges')
+    for t, nedges in enumerate(new_edge_counts):
+        new_tnet[t] = GenerateSymmetricNetwork(N, nedges, kind='er', seed=None)
 
     return new_tnet
 
 
-import numpy as np
 
 def GenerateTemporalNetworkByLinkActivation(tnet_init, seed=None):
     """
@@ -656,7 +656,7 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
     tnet_core, n_core_nodes = TrimIsolatedNodes(tnet)
 
     # Tag groups
-    sfsw_static = ['sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid', 'sw_static']
+    sfsw_static = ['sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid', 'sw_static', 'static', 'er_static']
     sigma_modes = ['desiredSigmaRho', 'sig_isMean', 'sig_halfMean', 'sig_quarterMean']
     sigma_scales = [1.0, 2.0, 0.5, 0.25]  # parallel to sigma_modes
 
@@ -664,10 +664,6 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
 
     if tag == 'original':
         tnet_result = tnet_core
-
-    elif tag in ['static', 'er_static']:
-        # Static ER snapshots repeated
-        tnet_result = GenerateStaticTemporalNetwork(tnet_core, kind=tag, seed=seed)
 
     elif tag == 'time':
         # Permute time order of snapshots
@@ -695,9 +691,7 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
         # Map tag to its default scale if caller didn't supply a custom one
         default_scale = sigma_scales[sigma_modes.index(tag)]
         use_scale = scale if scale is not None else default_scale
-        tnet_result = GenerateTemporalNetworkWithDensityVariability(
-            tnet_core, sigma_mode=tag, scale=use_scale, sigma=0
-        )
+        tnet_result = GenerateTnetWithDensityVariation(tnet_core, variation_type=tag, sigma=0, scale=use_scale)
 
     elif tag in sfsw_static:
         # Static small-world / scale-free snapshots repeated
@@ -716,6 +710,40 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
     return tnet_out, n_core_nodes
 
 
+
+
+def generateRandomTemporalNetwork(t, n, pconn):
+    """
+    Generate a symmetric random temporal network.
+
+    This function creates a temporal network represented as a 3D NumPy array of shape (t, n, n),
+    where each n x n slice along the time axis is a symmetric adjacency matrix representing the
+    network at a given time step. Edges between distinct node pairs are included independently
+    with probability `pconn`. All diagonal entries (self-loops) are set to 1.
+
+    Parameters:
+        t (int): Duration of the temporal network (number of time steps).
+        n (int): Number of nodes in the network.
+        pconn (float): Probability of connection between distinct nodes at each time step (0 ≤ pconn ≤ 1).
+
+    Returns:
+        np.ndarray: A temporal network of shape (t, n, n), where each entry is 1 if a connection exists,
+                    and 0 otherwise. Each n x n slice is symmetric with diagonal entries set to 1.
+    """
+    # Generate upper triangular random connections (excluding diagonal)
+    upper = np.triu(np.random.rand(t, n, n) < pconn, k=1)
+    
+    # Mirror the upper triangle to the lower triangle to make it symmetric
+    tnet = upper + np.transpose(upper, axes=(0, 2, 1))
+    
+    # Convert to int (0 or 1)
+    tnet = tnet.astype(int)
+    
+    # Add self-loops (diagonal = 1)
+    idx = np.arange(n)
+    tnet[:, idx, idx] = 1
+
+    return tnet
 
 
 def PartiallyRandomizeMatrix(adj_matrix, rewire_prob, preserve_first_snapshot=False, seed=None):
