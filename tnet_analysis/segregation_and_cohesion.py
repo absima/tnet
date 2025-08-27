@@ -340,7 +340,7 @@ def ComputePartnerStability(adjacency_matrices):
     return score_percentiles.tolist()
 
 
-def ComputePartnerDiversity(adjacency_matrices, window_size=None):
+def ComputePartnerDiversity(adjacency_matrices, window_size=20):
     """
     Compute partner diversity for each node using normalized entropy across temporal windows.
 
@@ -368,7 +368,7 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=None):
       log(# of distinct partners).
     - Nodes with no partners get diversity = 0.
     """
-    if window_size is None or window_size <= 0:
+    if window_size <= 0:
         window_size = 1
     
     T, N, _ = adjacency_matrices.shape
