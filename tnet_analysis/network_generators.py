@@ -693,14 +693,17 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
     else:
         raise ValueError("Unrecognized tag value for null-model generation.")
 
+    tnet_final_core, n_final_core_nodes = TrimIsolatedNodes(tnet_result)
+    
     # If isolated nodes were trimmed away, pad result back to original size
-    if n_nodes != n_core_nodes:
+    
+    if n_nodes != n_final_core_nodes:
         tnet_out = np.tile(np.eye(n_nodes, dtype=int), (T, 1, 1))
-        tnet_out[:, :n_core_nodes, :n_core_nodes] = tnet_result
+        tnet_out[:, :n_final_core_nodes, :n_final_core_nodes] = tnet_final_core
     else:
         tnet_out = tnet_result
 
-    return tnet_out, n_core_nodes
+    return tnet_out, n_final_core_nodes
 
 
 
