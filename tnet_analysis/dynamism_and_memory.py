@@ -337,41 +337,60 @@ def ComputeReturnability(adjacency_matrices):
 
 def LinkBurstiness(adjacency_matrices):
     """
-    Compute burstiness index for each link in the temporal network.
+    Compute burstiness index B = (σ - μ) / (σ + μ) per link over time.
 
     Parameters
     ----------
-    adjacency_matrices : array, shape (T, N, N)
-        Sequence of binary adjacency matrices (0/1).
+    adjacency_matrices : array-like, shape (T, N, N)
+        Sequence of binary (0/1) adjacency matrices for an undirected network.
+        Diagonal is ignored if present.
 
     Returns
     -------
-    link_burstiness : array, shape (N, N)
-        Burstiness index per link (NaN if insufficient data).
+    link_burstiness : np.ndarray, shape (N, N)
+        Burstiness per link; NaN where a link has fewer than 3 activations.
+
+    Notes
+    -----
+    - Complexity is proportional to the number of *active* links with ≥3 events,
+      not to N^2. This is typically much faster than triple nesting.
+    - If your data are extremely sparse across time, consider using the
+      `LinkBurstinessSparse` version below for further speed/memory wins.
     """
-    T, N, _ = adjacency_matrices.shape
-    link_burstiness = np.full((N, N), np.nan)
+    A = np.asarray(adjacency_matrices, dtype=bool)  # (T, N, N)
+    T, N, _ = A.shape
+    # Zero diagonal just in case
+    if N == A.shape[2]:
+        A[:, np.arange(N), np.arange(N)] = False
 
-    for i in range(N):
-        for j in range(i+1, N):  # Only upper triangle (i < j)
-            activation_times = []
+    # Count activations per link and select only those with >= 3 events (need 2 gaps)
+    counts = A.sum(axis=0)                      # (N, N)
+    mask = (counts >= 3)
+    # Upper triangle indices of links to process
+    iu, ju = np.triu_indices(N, k=1)
+    sel = mask[iu, ju]
+    iu, ju = iu[sel], ju[sel]
 
-            for t in range(T):
-                if adjacency_matrices[t, i, j] > 0:
-                    activation_times.append(t)
+    # Flatten time dimension to (T, N*N) to access columns quickly
+    A2 = A.reshape(T, N * N)
+    cols = (iu * N + ju)
 
-            if len(activation_times) >= 3:  # Need at least 2 inter-event gaps
-                inter_event_times = np.diff(activation_times)
-                mu = np.mean(inter_event_times)
-                sigma = np.std(inter_event_times)
+    out = np.full((N, N), np.nan, dtype=float)
 
-                if mu + sigma > 0:
-                    burstiness = (sigma - mu) / (sigma + mu)
-                    link_burstiness[i, j] = burstiness
-                    link_burstiness[j, i] = burstiness  # symmetric network
+    # Process only selected columns 
+    for c, i, j in zip(cols, iu, ju):
+        times = np.flatnonzero(A2[:, c])
+        # times.size >= 3 by construction
+        gaps = np.diff(times)
+        mu = gaps.mean()
+        sigma = gaps.std(ddof=0)
+        denom = (sigma + mu)
+        if denom > 0:
+            b = (sigma - mu) / denom
+            out[i, j] = b
+            out[j, i] = b  # symmetric
 
-    return link_burstiness 
-
+    return out
 
      
      
