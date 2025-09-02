@@ -635,8 +635,8 @@ def LatencyMatrixAnalysis(dmtx, penalty): #summarize_temporal_distance_matrix(dm
     - number of finite distance pairs
     """
     
-    np.fill_diagonal(dmx, np.nan)
-    dmtx = np.where(np.isinf(dmx), np.nan, dmx)
+    np.fill_diagonal(dmx, np.nan) # diag to nan
+    dmtx = np.where(np.isinf(dmx), np.nan, dmx) # inf to nan; 
     dist = np.nanmean(dmtx)
     dbool = ~ np.isnan(dmtx)
     reach = np.sum(dbool, 1)

@@ -1,6 +1,7 @@
 import numpy as np
 import warnings
 from scipy.stats import norm
+from scipy import sparse
 
 
 def ComputeStaticClustering(adjacency_matrices):
@@ -159,67 +160,6 @@ def ComputeTemporalTransitivity(adjacency_matrices):
         Ts.append(ComputeSnapshotTransitivity(A))
     return float(np.mean(Ts)) if len(Ts) else np.nan
 
-
-def ComputeSnapshotModularity(adj_matrix, labels):
-    """
-    Newman-Girvan modularity Q for an undirected simple graph snapshot.
-
-    Parameters
-    ----------
-    adj_matrix : np.ndarray, shape (N, N)
-        Binary (or weighted) symmetric adjacency. Diagonal is ignored.
-    labels : array-like, shape (N,)
-        Community labels per node.
-
-    Returns
-    -------
-    Q : float
-        Modularity value in [-0.5, 1) (typical ranges), depending on structure.
-
-    Notes
-    -----
-    Q = (1/2m) sum_{ij} [A_ij - (k_i k_j)/(2m)] * delta(c_i, c_j)
-    Works for weighted A as well (k_i := sum_j A_ij, m := sum_ij A_ij / 2).
-    """
-    A = adj_matrix.astype(float).copy()
-    np.fill_diagonal(A, 0.0)
-    k = A.sum(axis=1)
-    m = k.sum() / 2.0
-    if m == 0:
-        return 0.0
-
-    labels = np.asarray(labels)
-    same_com = (labels[:, None] == labels[None, :]).astype(float)
-
-    expected = np.outer(k, k) / (2.0 * m)
-    B = A - expected
-    Q = (B * same_com).sum() / (2.0 * m)
-    return float(Q)
-
-
-def ComputeTemporalModularity(adjacency_matrices, labels_per_snapshot):
-    """
-    Average modularity across time given community labels at each snapshot.
-
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Binary or weighted symmetric adjacency per snapshot.
-    labels_per_snapshot : np.ndarray, shape (T, N)
-        Community labels per node at each snapshot (can vary over time).
-
-    Returns
-    -------
-    avg_Q : float
-        Mean modularity across snapshots.
-    Qs : np.ndarray, shape (T,)
-        Per-snapshot modularity values.
-    """
-    T = adjacency_matrices.shape[0]
-    Qs = np.zeros(T, dtype=float)
-    for t in range(T):
-        Qs[t] = ComputeSnapshotModularity(adjacency_matrices[t], labels_per_snapshot[t])
-    return float(np.mean(Qs)), Qs
 
 
 def ComputeSnapshotParticipationCoefficient(adj_matrix, labels, eps=1e-12):
@@ -413,84 +353,98 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=20):
 
 
 
-
-    
-        
 def ComputeNodePersistence(tnet, confidence=0.95):
-     """
-     Compute node-level persistence scores and identify significantly persistent nodes.
+    """
+    Compute node-level persistence scores and identify significantly persistent nodes.
 
-     For each node i, persistence is defined as the mean probability that i is
-     connected to its ever-connected neighbors across time. A node is deemed
-     'significantly persistent' if its persistence score exceeds a theoretical
-     chance threshold derived from link density and sampling variance.
+    For each node i, persistence is defined as the mean probability that i is
+    connected to its ever-connected neighbors across time. A node is deemed
+    'significantly persistent' if its persistence score exceeds a theoretical
+    chance threshold derived from link density and sampling variance.
 
-     Parameters
-     ----------
-     tnet : np.ndarray, shape (T, N, N)
-         Temporal adjacency matrices (binary or weighted). Symmetric assumed.
-     confidence : float, optional (default=0.95)
-         Confidence level (e.g., 0.95, 0.99) used to set the theoretical
-         threshold for persistence.
+    Parameters
+    ----------
+    tnet : np.ndarray, shape (T, N, N)
+        Temporal adjacency matrices (binary or weighted). Symmetric assumed.
+    confidence : float, optional (default=0.95)
+        Confidence level (e.g., 0.95, 0.99) used to set the theoretical
+        threshold for persistence.
 
-     Returns
-     -------
-     score_percentiles : np.ndarray, shape (5,)
-         [5, 25, 50, 75, 95] percentiles of node persistence scores.
-     n_persistent_nodes : int
-         Number of nodes exceeding the theoretical persistence threshold.
+    Returns
+    -------
+    score_percentiles : np.ndarray, shape (5,)
+        [5, 25, 50, 75, 95] percentiles of node persistence scores.
+    n_persistent_nodes : int
+        Number of nodes exceeding the theoretical persistence threshold.
 
-     Notes
-     -----
-     - Weighted inputs are binarized (>0 → 1).
-     - Node i’s score is the average persistence probability across all
-       neighbors that ever connected to i.
-     - Theoretical threshold is computed from the mean temporal edge density,
-       with binomial standard error scaled by z_(confidence).
-     """
-     def ComputeTheoreticalThreshold(adj_matrices, confidence):
-         """Helper: compute significance threshold for persistence scores."""
-         T, N, _ = adj_matrices.shape
-         k = norm.ppf(1 - (1 - confidence) / 2.0)
+    Notes
+    -----
+    - Weighted inputs are binarized (>0 → 1).
+    - Node i’s score is the average persistence probability across all
+      neighbors that ever connected to i.
+    - Theoretical threshold is computed from the mean temporal edge density,
+      with binomial standard error scaled by z_(confidence).
+    """
 
-         link_counts = np.sum(adj_matrices > 0, axis=(1, 2))  # total edges per snapshot
-         max_links = N * (N - 1) / 2.0  # max undirected links
+    def ComputeTheoreticalThreshold(adj_matrices, confidence):
+        """
+        Compute theoretical significance threshold for persistence scores.
+        Returns np.inf silently if the computation is not feasible.
+        """
+        T, N, _ = adj_matrices.shape
+        if T <= 1:
+            return np.inf
 
-         p_t = link_counts / max_links
-         p_avg = np.mean(p_t)
+        max_links = N * (N - 1) / 2.0  # for undirected graphs
+        if max_links <= 0:
+            return np.inf
 
-         std_persistence = np.sqrt(p_avg * (1 - p_avg) / T)
-         threshold = p_avg + k * std_persistence
-         return threshold
+        link_counts = np.sum(adj_matrices > 0, axis=(1, 2))
+        p_t = link_counts / max_links
+        p_avg = np.clip(np.mean(p_t), 0, 1)
 
-     T, N, _ = tnet.shape
+        inner = p_avg * (1 - p_avg) / T
+        if inner < 0 or np.isnan(inner):
+            return np.inf
 
-     # Binarize if weighted
-     binary_matrices = (tnet > 0).astype(int)
+        k = norm.ppf(1 - (1 - confidence) / 2.0)
+        std_persistence = np.sqrt(inner)
+        threshold = p_avg + k * std_persistence
 
-     # Persistence counts across time
-     persistence_counts = np.sum(binary_matrices, axis=0)  # (N, N)
-     persistence_probs = persistence_counts / T           # (N, N)
+        return threshold
 
-     # Node-level persistence scores
-     persistence_scores = np.zeros(N)
-     for i in range(N):
-         ever_connected = persistence_counts[i] > 0
-         if np.sum(ever_connected) == 0:
-             persistence_scores[i] = np.nan
-         else:
-             persistence_scores[i] = np.mean(persistence_probs[i][ever_connected])
+    T, N, _ = tnet.shape
 
-     # Theoretical threshold
-     threshold = ComputeTheoreticalThreshold(tnet, confidence)
+    # Binarize if weighted
+    binary_matrices = (tnet > 0).astype(int)
 
-     # Significantly persistent nodes
-     persistent_nodes = np.where(persistence_scores > threshold)[0]
+    # Persistence counts across time
+    persistence_counts = np.sum(binary_matrices, axis=0)  # (N, N)
+    persistence_probs = persistence_counts / T            # (N, N)
 
-     score_percentiles = np.nanpercentile(persistence_scores, [5, 25, 50, 75, 95])
-     n_persistent_nodes = len(persistent_nodes)
-     return score_percentiles.tolist(), n_persistent_nodes  
+    # Node-level persistence scores
+    persistence_scores = np.zeros(N)
+    for i in range(N):
+        ever_connected = persistence_counts[i] > 0
+        if np.sum(ever_connected) == 0:
+            persistence_scores[i] = np.nan
+        else:
+            persistence_scores[i] = np.mean(persistence_probs[i][ever_connected])
+
+    # Theoretical threshold
+    threshold = ComputeTheoreticalThreshold(tnet, confidence)
+
+    # Significantly persistent nodes
+    persistent_nodes = np.where(persistence_scores > threshold)[0]
+
+    score_percentiles = np.nanpercentile(persistence_scores, [5, 25, 50, 75, 95])
+    n_persistent_nodes = len(persistent_nodes)
+
+    return score_percentiles.tolist(), n_persistent_nodes
+ 
     
+
+
 
 def SummarizeSegregationStructure(adjacency_matrices, labels_per_snapshot=None, return_details=False):
     """
@@ -567,23 +521,6 @@ def SummarizeSegregationStructure(adjacency_matrices, labels_per_snapshot=None, 
     node_persist_pct, n_persistent_nodes = ComputeNodePersistence(adjacency_matrices)
     summary['node_persistence_pct'] = node_persist_pct
     summary['n_persistent_nodes'] = int(n_persistent_nodes)
-
-    # Optional: label-based structure metrics
-    if labels_per_snapshot is not None:
-        avg_Q, Qs = ComputeTemporalModularity(adjacency_matrices, labels_per_snapshot)
-        avg_P, P_all = ComputeTemporalParticipationCoefficient(adjacency_matrices, labels_per_snapshot)
-        summary.update({
-            'avg_modularity': float(avg_Q),
-            'modularity_ts': Qs,
-            'avg_participation': float(avg_P),
-            'participation_ts': P_all,
-        })
-
-    if return_details:
-        # If you later add nodewise-return options to the primitives,
-        # you can include them here (placeholders below).
-        # For now, we expose only what’s naturally available without changing your APIs.
-        pass
 
     return summary
     

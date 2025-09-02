@@ -70,14 +70,16 @@ It is organized into five functional groups that form a **pipeline**:
 - `ComputeStaticClustering`  
 - `ComputeTemporalClustering`  
 - `ComputeSnapshotTransitivity`, `ComputeTemporalTransitivity`  
-- `ComputeSnapshotModularity`, `ComputeTemporalModularity`  
 - `ComputeSnapshotParticipationCoefficient`, `ComputeTemporalParticipationCoefficient`  
 - `ComputePartnerStability`  
 - `ComputePartnerDiversity`  
 - `ComputeNodePersistence`  
-- `SummarizeSegregationStructure` → Bundle of structure metrics.  
+
 
 ---
+
+## 📂 Group 5.1: Modularity (to be revised)
+- `ComputeSnapshotModularity`, `ComputeTemporalModularity`  
 
 ## 📌 Pipeline Overview
 
