@@ -354,8 +354,6 @@ def LinkBurstiness(adjacency_matrices):
     -----
     - Complexity is proportional to the number of *active* links with ≥3 events,
       not to N^2. This is typically much faster than triple nesting.
-    - If your data are extremely sparse across time, consider using the
-      `LinkBurstinessSparse` version below for further speed/memory wins.
     """
     A = np.asarray(adjacency_matrices, dtype=bool)  # (T, N, N)
     T, N, _ = A.shape

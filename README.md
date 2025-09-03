@@ -96,5 +96,6 @@ Together these provide a unified framework for studying both **integration** and
 ## 🚀 Author
 
 Built by Simachew Mengiste (with Demian Bataglia)
+
 Driven by curiosity, scientific clarity, and modular design.
 FunSy - LNCA - Unistra

@@ -649,10 +649,11 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
     tnet_core, n_core_nodes = TrimIsolatedNodes(tnet)
 
     # Tag groups
+    erand_group = ['erand_er', 'erand_sws', 'erand_sfs', 'erand_swr', 'erand_sfr']
     sfsw_static = ['sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid', 'sw_static', 'static', 'er_static']
     sigma_modes = ['desiredSigmaRho', 'sig_isMean', 'sig_halfMean', 'sig_quarterMean']
     sigma_scales = [1.0, 2.0, 0.5, 0.25]  # parallel to sigma_modes
-
+    
     rng = np.random.default_rng(seed)
 
     if tag == 'original':
@@ -664,14 +665,22 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
         rng.shuffle(time_idx)
         tnet_result = tnet_core[time_idx, :, :]
 
-    elif tag == 'edges':
+    elif tag in erand_group: 
         # Preserve per-frame edge counts, regenerate ER snapshot per frame
         # Count edges per frame (exclude diagonal)
+        identifier = tag.split('_')[1]
+        kind = identifier[:2]
         edge_counts = ((tnet_core.sum(axis=(1, 2)) - n_core_nodes) // 2).astype(int)
-        tnet_result = np.zeros((T, n_core_nodes, n_core_nodes), dtype=int)
+        tnet_result0 = np.zeros((T, n_core_nodes, n_core_nodes), dtype=int)
         for t_idx, n_edges in enumerate(edge_counts):
-            tnet_result[t_idx] = GenerateSymmetricNetwork(n_core_nodes, int(n_edges), kind='er', seed=seed)
-
+            tnet_result0[t_idx] = GenerateSymmetricNetwork(n_core_nodes, int(n_edges), kind=kind, seed=seed)
+        if identifier[0]== 's' and identifier[-1]=='r': # reindex/relable to distroy persistence by construction 
+            tnet_result = np.empty_like(tnet_result0)
+            for t, mtx in enumerate(tnet_result0):
+                perm = np.random.permutation(M)
+                tnet_result[t] = mtx[perm][:,perm] 
+        else:
+            tnet_result = tnet_result0
     elif tag == 'edgetime':
         # First shuffle time, then re-generate edges per frame
         tnet_time, _ = GenerateNullModel(tnet_core.copy(), 'time', seed=seed)
