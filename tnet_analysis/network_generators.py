@@ -186,7 +186,7 @@ def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.
         pref_values = n_nodes - indices + 1
     elif model == 'sf_exponential':
         pref_values = np.exp(-a * (indices - 1))
-    elif model == 'sf_powerlaw':
+    elif model == 'sf_powerlaw' or model == 'sf':
         pref_values = indices ** (-gamma)
     elif model == 'sf_hybrid':
         linear = n_nodes - indices + 1
@@ -677,7 +677,7 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
         if identifier[0]== 's' and identifier[-1]=='r': # reindex/relable to distroy persistence by construction 
             tnet_result = np.empty_like(tnet_result0)
             for t, mtx in enumerate(tnet_result0):
-                perm = np.random.permutation(M)
+                perm = np.random.permutation(n_core_nodes)
                 tnet_result[t] = mtx[perm][:,perm] 
         else:
             tnet_result = tnet_result0
