@@ -186,7 +186,7 @@ def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.
         pref_values = n_nodes - indices + 1
     elif model == 'sf_exponential':
         pref_values = np.exp(-a * (indices - 1))
-    elif model == 'sf_powerlaw' or model == 'sf':
+    elif model in ['sf_powerlaw', 'sf']:
         pref_values = indices ** (-gamma)
     elif model == 'sf_hybrid':
         linear = n_nodes - indices + 1
