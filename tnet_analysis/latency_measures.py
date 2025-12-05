@@ -280,13 +280,49 @@ def MeanLatencyMatrixAnalysis(dmx, penalty):
 # End-to-end bundle for temporal distance measures
 # =========================================================
 
-def ComputeTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None):
+def ComputeSmartTemporalDistanceMeasures(tnet, random_seed=None):
     """
     Compute a bundle of distance-related measures for a temporal network.
 
     This function reports:
-      - Avg/std degree over time (from binarized adjacency)
       - SmartWalker summaries (earliest-arrival distances)
+
+    Parameters
+    ----------
+    tnet : np.ndarray, shape (T, N, N)
+        Temporal adjacency (binary), symmetric per snapshot.
+    random_seed : int or None, optional (default=None)
+        Seed for reproducibility (used by RandomWalker).
+
+    Returns
+    -------
+    metrics : list
+        - irrigation
+        - impermeability
+        - latency
+        - penalized latency
+        - number of infinite pairs 
+        - number of finitie pairs ('irrigation')
+    """
+    T = tnet.shape[0]
+    penalty = T + 1
+
+    # avg_deg, std_deg = ComputeAverageDegree(tnet.copy())
+
+    sdmtx = SmartWalker(tnet)
+    smart_q6 = MeanLatencyMatrixAnalysis(sdmtx, penalty)
+
+    # rdmtx, drunk_q6_mn = RandomWalker(tnet, n_reps, seed=random_seed)
+    # drunk_q6 = MeanLatencyMatrixAnalysis(rdmtx, penalty)
+
+    # Return flattened list of all summaries
+    return smart_q6 
+
+def ComputeDrunkTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None):
+    """
+    Compute a bundle of distance-related measures for a temporal network.
+
+    This function reports:
       - RandomWalker summaries (Monte Carlo FPT), plus a combined mean-Q6 across trials
 
     Parameters
@@ -301,27 +337,27 @@ def ComputeTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None):
     Returns
     -------
     metrics : list
-        Concatenation of:
-          [avg_degree, std_degree] 
-          + MeanDistance(SmartWalker) six-tuple
-          + MeanDistance(RandomWalker-meanFPT) six-tuple
-          + RandomWalker mean-Q6 (across trials) six-tuple
+        metrics : list
+            - irrigation
+            - impermeability
+            - latency
+            - penalized latency
+            - number of infinite pairs 
+            - number of finitie pairs ('irrigation')
     """
-    T = tnet.shape[0]
-    penalty = T + 1
+    # T = tnet.shape[0]
+    # penalty = T + 1
 
-    avg_deg, std_deg = ComputeAverageDegree(tnet.copy())
+    # avg_deg, std_deg = ComputeAverageDegree(tnet.copy())
 
-    sdmtx = SmartWalker(tnet)
-    smart_q6 = MeanLatencyMatrixAnalysis(sdmtx, penalty)
+    # sdmtx = SmartWalker(tnet)
+    # smart_q6 = MeanLatencyMatrixAnalysis(sdmtx, penalty)
 
     rdmtx, drunk_q6_mn = RandomWalker(tnet, n_reps, seed=random_seed)
-    drunk_q6 = MeanLatencyMatrixAnalysis(rdmtx, penalty)
+    # drunk_q6 = MeanLatencyMatrixAnalysis(rdmtx, penalty)
 
     # Return flattened list of all summaries
-    return [avg_deg, std_deg] + smart_q6 + drunk_q6 + drunk_q6_mn
-
-
+    return drunk_q6_mn
 
 
 def ComputeCirculationLatencyAndRate(adjacency_matrices, max_latency=None, return_full=False):
