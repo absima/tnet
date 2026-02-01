@@ -1,5 +1,7 @@
 # Temporal Network Analysis Toolkit
 
+![tnet analysis pipeline](images/tnet_schema.png)
+
 This toolkit provides functions for building, transforming, and analyzing **temporal networks**.  
 It is organized into five functional groups that form a **pipeline**:
 
