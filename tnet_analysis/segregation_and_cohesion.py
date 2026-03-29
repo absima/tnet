@@ -4,28 +4,30 @@ from scipy.stats import norm
 from scipy import sparse
 
 
-def ComputeStaticClustering(adjacency_matrices):
+def _summarize_scores(values, summary_stat="median"):
+    """Reduce a 1D score array to a median or mean."""
+    if summary_stat == "median":
+        return float(np.nanmedian(values))
+    if summary_stat == "mean":
+        return float(np.nanmean(values))
+    raise ValueError("summary_stat must be 'median' or 'mean'.")
+
+
+def ComputeStaticClustering(adjacency_matrices, summary_stat="median"):
     """
     Compute average static clustering coefficient per node across time.
+    For each snapshot, the clustering coefficient of node i is defined as the fraction of realized links among i's neighbors out of the maximum possible. Final score per node is the time-average across snapshots.
 
-    For each snapshot, the clustering coefficient of node i is defined as the
-    fraction of realized links among i's neighbors out of the maximum possible.
-    Final score per node is the time-average across snapshots.
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
+        summary_stat: `median` or `mean` for reducing nodewise scores.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
+    Returns:
+        summary_score: float. Requested summary of node static-clustering scores.
 
-    Returns
-    -------
-    score_percentiles : np.ndarray, shape (5,)
-        [5, 25, 50, 75, 95] percentiles of node static clustering scores (0–1).
-
-    Notes
-    -----
-    - Nodes with degree < 2 get clustering = 0 for that snapshot.
-    - This is the time-averaged version of the classic Watts–Strogatz clustering coefficient.
+    Notes:
+        - Nodes with degree < 2 get clustering = 0 for that snapshot.
+        - This is the time-averaged version of the classic Watts–Strogatz clustering coefficient.
     """
     T, N, _ = adjacency_matrices.shape
     clustering_trajectories = np.zeros((T, N))
@@ -47,36 +49,26 @@ def ComputeStaticClustering(adjacency_matrices):
                 clustering_trajectories[t, i] = 0.0
 
     clustering_scores = np.mean(clustering_trajectories, axis=0)
-    score_percentiles = np.nanpercentile(clustering_scores, [5, 25, 50, 75, 95])
-    return score_percentiles.tolist()
+    return _summarize_scores(clustering_scores, summary_stat=summary_stat)
 
 
-def ComputeTemporalClustering(adjacency_matrices, delta=1):
+def ComputeTemporalClustering(adjacency_matrices, delta=1, summary_stat="median"):
     """
     Compute temporal clustering coefficient for each node based on time-respecting triangles.
+    A temporal triangle for node i is formed if: - i–j is active at time t1, - i–k is active at time t2 with t1 < t2 ≤ t1+delta, - and j–k is connected at some time t3 with t1 < t3 ≤ t2.
 
-    A temporal triangle for node i is formed if:
-      - i–j is active at time t1,
-      - i–k is active at time t2 with t1 < t2 ≤ t1+delta,
-      - and j–k is connected at some time t3 with t1 < t3 ≤ t2.
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
+        delta: int, optional (default=1). Maximum temporal gap (in snapshots) allowed between edges to form a temporal triangle.
+        summary_stat: `median` or `mean` for reducing nodewise scores.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
-    delta : int, optional (default=1)
-        Maximum temporal gap (in snapshots) allowed between edges to form a temporal triangle.
+    Returns:
+        summary_score: float. Requested summary of node temporal-clustering scores.
 
-    Returns
-    -------
-    score_percentiles : np.ndarray, shape (5,)
-        [5, 25, 50, 75, 95] percentiles of node temporal clustering scores (0–1).
-
-    Notes
-    -----
-    - Nodes with no valid triplets get clustering = 0.
-    - delta=1 reduces to checking consecutive snapshots only.
-    - Complexity is O(T * N * k^2 * delta) per node, where k is degree.
+    Notes:
+        - Nodes with no valid triplets get clustering = 0.
+        - delta=1 reduces to checking consecutive snapshots only.
+        - Complexity is O(T * N * k^2 * delta) per node, where k is degree.
     """
     T, N, _ = adjacency_matrices.shape
     triangle_counts = np.zeros(N)
@@ -103,30 +95,25 @@ def ComputeTemporalClustering(adjacency_matrices, delta=1):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        temporal_clustering = np.where(triplet_counts > 0,
-                                       triangle_counts / triplet_counts,
-                                       0.0)
+        temporal_clustering = np.where(
+            triplet_counts > 0,
+            triangle_counts / triplet_counts,
+            0.0,
+        )
 
-    score_percentiles = np.nanpercentile(temporal_clustering, [5, 25, 50, 75, 95])
-    return score_percentiles.tolist()
-    
-    
+    return _summarize_scores(temporal_clustering, summary_stat=summary_stat)
+
+
 def ComputeSnapshotTransitivity(adj_matrix):
     """
     Global transitivity (clustering) for an undirected simple graph snapshot.
+    Assumes binary symmetric adjacency with zero diagonal. Triangles = trace(A^3)/6; connected triplets = sum_i C(deg_i, 2).
 
-    Assumes binary symmetric adjacency with zero diagonal.
-    Triangles = trace(A^3)/6; connected triplets = sum_i C(deg_i, 2).
+    Args:
+        adj_matrix: np.ndarray, shape (N, N). Binary symmetric adjacency with zero diagonal.
 
-    Parameters
-    ----------
-    adj_matrix : np.ndarray, shape (N, N)
-        Binary symmetric adjacency with zero diagonal.
-
-    Returns
-    -------
-    transitivity : float
-        3 * (#triangles) / (#connected triplets). Returns 0 if no triplets exist.
+    Returns:
+        transitivity: float. 3 * (#triangles) / (#connected triplets). Returns 0 if no triplets exist.
     """
     A = adj_matrix.astype(int)
     np.fill_diagonal(A, 0)
@@ -134,7 +121,6 @@ def ComputeSnapshotTransitivity(adj_matrix):
     triplets = np.sum(deg * (deg - 1)) / 2
     if triplets == 0:
         return 0.0
-    # triangles = trace(A^3)/6
     A2 = A @ A
     A3 = A2 @ A
     triangles = np.trace(A3) / 6.0
@@ -145,15 +131,11 @@ def ComputeTemporalTransitivity(adjacency_matrices):
     """
     Average snapshot transitivity (global clustering) over time.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Binary temporal adjacency.
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Binary temporal adjacency.
 
-    Returns
-    -------
-    avg_transitivity : float
-        Mean transitivity across snapshots (ignores NaNs).
+    Returns:
+        avg_transitivity: float. Mean transitivity across snapshots (ignores NaNs).
     """
     Ts = []
     for A in adjacency_matrices:
@@ -161,27 +143,18 @@ def ComputeTemporalTransitivity(adjacency_matrices):
     return float(np.mean(Ts)) if len(Ts) else np.nan
 
 
-
 def ComputeSnapshotParticipationCoefficient(adj_matrix, labels, eps=1e-12):
     """
     Participation coefficient (network segregation/integration per node).
+    For node i: P_i = 1 - sum_c (k_i^c / k_i)^2, where k_i^c is strength/degree of i to community c. Returns NaN for isolated nodes (k_i = 0).
 
-    For node i: P_i = 1 - sum_c (k_i^c / k_i)^2, where k_i^c is strength/degree
-    of i to community c. Returns NaN for isolated nodes (k_i = 0).
+    Args:
+        adj_matrix: np.ndarray, shape (N, N). Binary or weighted symmetric adjacency (diag ignored).
+        labels: array-like, shape (N,). Community labels per node.
+        eps: float, optional (default=1e-12). Numerical guard to avoid division-by-zero issues.
 
-    Parameters
-    ----------
-    adj_matrix : np.ndarray, shape (N, N)
-        Binary or weighted symmetric adjacency (diag ignored).
-    labels : array-like, shape (N,)
-        Community labels per node.
-    eps : float, optional (default=1e-12)
-        Numerical guard to avoid division-by-zero issues.
-
-    Returns
-    -------
-    P : np.ndarray, shape (N,)
-        Participation coefficient per node (NaN for isolated nodes).
+    Returns:
+        P: np.ndarray, shape (N,). Participation coefficient per node (NaN for isolated nodes).
     """
     A = adj_matrix.astype(float).copy()
     np.fill_diagonal(A, 0.0)
@@ -191,7 +164,6 @@ def ComputeSnapshotParticipationCoefficient(adj_matrix, labels, eps=1e-12):
     k = A.sum(axis=1)
     P = np.full(n, np.nan, dtype=float)
 
-    # group mask per community
     comms = {c: np.where(labels == c)[0] for c in np.unique(labels)}
     for i in range(n):
         ki = k[i]
@@ -210,18 +182,13 @@ def ComputeTemporalParticipationCoefficient(adjacency_matrices, labels_per_snaps
     """
     Average participation coefficient over time.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-    labels_per_snapshot : np.ndarray, shape (T, N)
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N).
+        labels_per_snapshot: np.ndarray, shape (T, N).
 
-    Returns
-    -------
-    avg_participation : float
-        Mean of nodewise participation coefficients averaged across time
-        (ignores NaNs for isolated nodes).
-    P_all : np.ndarray, shape (T, N)
-        Per-snapshot nodewise participation coefficients.
+    Returns:
+        avg_participation: float. Mean of nodewise participation coefficients averaged across time (ignores NaNs for isolated nodes).
+        P_all: np.ndarray, shape (T, N). Per-snapshot nodewise participation coefficients.
     """
     T, N, _ = adjacency_matrices.shape
     P_all = np.full((T, N), np.nan, dtype=float)
@@ -232,32 +199,22 @@ def ComputeTemporalParticipationCoefficient(adjacency_matrices, labels_per_snaps
     return float(np.nanmean(P_all)), P_all
 
 
-
-
-
-def ComputePartnerStability(adjacency_matrices):
+def ComputePartnerStability(adjacency_matrices, summary_stat="median"):
     """
     Compute partner stability for each node, based on recurrence of connections over time.
+    Stability is higher when neighbor interactions recur more frequently, i.e., when the mean temporal gap between repeated connections is smaller.
 
-    Stability is higher when neighbor interactions recur more frequently, i.e.,
-    when the mean temporal gap between repeated connections is smaller.
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
+        summary_stat: `median` or `mean` for reducing nodewise scores.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Sequence of binary adjacency matrices (0/1).
-        Symmetric, diagonal ignored.
+    Returns:
+        summary_score: float. Requested summary of node partner-stability scores.
 
-    Returns
-    -------
-    score_percentiles : np.ndarray, shape (5,)
-        [5, 25, 50, 75, 95] percentiles of node stability scores (0–1).
-
-    Notes
-    -----
-    - Node i’s score is computed as 1 - mean_gap/T, where mean_gap is the average
-      interval (in snapshots) between consecutive interactions with the same neighbor.
-    - Nodes with no recurring neighbors get stability = 0.
+    Notes:
+        - Node i’s score is computed as 1 - mean_gap/T, where mean_gap is the average
+        interval (in snapshots) between consecutive interactions with the same neighbor.
+        - Nodes with no recurring neighbors get stability = 0.
     """
     T, N, _ = adjacency_matrices.shape
     stability_scores = np.zeros(N)
@@ -276,41 +233,32 @@ def ComputePartnerStability(adjacency_matrices):
         else:
             stability_scores[i] = 0.0
 
-    score_percentiles = np.nanpercentile(stability_scores, [5, 25, 50, 75, 95])
-    return score_percentiles.tolist()
+    return _summarize_scores(stability_scores, summary_stat=summary_stat)
 
 
-def ComputePartnerDiversity(adjacency_matrices, window_size=20):
+def ComputePartnerDiversity(adjacency_matrices, window_size=20, summary_stat="median"):
     """
     Compute partner diversity for each node using normalized entropy across temporal windows.
+    Diversity is higher when a node’s connections are distributed across many partners and many time windows, rather than concentrated in a few.
 
-    Diversity is higher when a node’s connections are distributed across many
-    partners and many time windows, rather than concentrated in a few.
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
+        window_size: int, optional (default=20). Temporal window size for grouping interactions.
+        summary_stat: `median` or `mean` for reducing nodewise scores.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Sequence of binary adjacency matrices (0/1).
-        Symmetric, diagonal ignored.
-    window_size : int, optional (default=10)
-        Temporal window size for grouping interactions.
+    Returns:
+        summary_score: float. Requested summary of node partner-diversity scores.
 
-    Returns
-    -------
-    score_percentiles : np.ndarray, shape (5,)
-        [5, 25, 50, 75, 95] percentiles of node diversity scores (0–1).
-
-    Notes
-    -----
-    - For each neighbor j of node i, we collect the set of windows where i–j
-      connections occurred. Temporal span per neighbor is normalized by total windows.
-    - Diversity is then computed as the entropy of these spans, normalized by
-      log(# of distinct partners).
-    - Nodes with no partners get diversity = 0.
+    Notes:
+        - For each neighbor j of node i, we collect the set of windows where i–j
+        connections occurred. Temporal span per neighbor is normalized by total windows.
+        - Diversity is then computed as the entropy of these spans, normalized by
+        log(# of distinct partners).
+        - Nodes with no partners get diversity = 0.
     """
     if window_size <= 0:
         window_size = 1
-    
+
     T, N, _ = adjacency_matrices.shape
     diversity_scores = np.zeros(N, dtype=float)
     n_windows = T // window_size if window_size > 0 else 1
@@ -348,48 +296,34 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=20):
         else:
             diversity_scores[i] = 0.0
 
-    score_percentiles = np.nanpercentile(diversity_scores, [5, 25, 50, 75, 95])
-    return score_percentiles.tolist()
+    return _summarize_scores(diversity_scores, summary_stat=summary_stat)
 
 
-
-def ComputeNodePersistence(tnet, confidence=0.95):
+def ComputeNodePersistence(tnet, confidence=0.95, summary_stat="median"):
     """
     Compute node-level persistence scores and identify significantly persistent nodes.
+    For each node i, persistence is defined as the mean probability that i is connected to its ever-connected neighbors across time. A node is deemed 'significantly persistent' if its persistence score exceeds a theoretical chance threshold derived from link density and sampling variance.
 
-    For each node i, persistence is defined as the mean probability that i is
-    connected to its ever-connected neighbors across time. A node is deemed
-    'significantly persistent' if its persistence score exceeds a theoretical
-    chance threshold derived from link density and sampling variance.
+    Args:
+        tnet: np.ndarray, shape (T, N, N). Temporal adjacency matrices (binary or weighted). Symmetric assumed.
+        confidence: float, optional (default=0.95). Confidence level (e.g., 0.95, 0.99) used to set the theoretical threshold for persistence.
+        summary_stat: `median` or `mean` for reducing nodewise scores.
 
-    Parameters
-    ----------
-    tnet : np.ndarray, shape (T, N, N)
-        Temporal adjacency matrices (binary or weighted). Symmetric assumed.
-    confidence : float, optional (default=0.95)
-        Confidence level (e.g., 0.95, 0.99) used to set the theoretical
-        threshold for persistence.
+    Returns:
+        summary_score: float. Requested summary of node persistence scores.
+        n_persistent_nodes: int. Number of nodes exceeding the theoretical persistence threshold.
 
-    Returns
-    -------
-    score_percentiles : np.ndarray, shape (5,)
-        [5, 25, 50, 75, 95] percentiles of node persistence scores.
-    n_persistent_nodes : int
-        Number of nodes exceeding the theoretical persistence threshold.
-
-    Notes
-    -----
-    - Weighted inputs are binarized (>0 → 1).
-    - Node i’s score is the average persistence probability across all
-      neighbors that ever connected to i.
-    - Theoretical threshold is computed from the mean temporal edge density,
-      with binomial standard error scaled by z_(confidence).
+    Notes:
+        - Weighted inputs are binarized (>0 → 1).
+        - Node i’s score is the average persistence probability across all
+        neighbors that ever connected to i.
+        - Theoretical threshold is computed from the mean temporal edge density,
+        with binomial standard error scaled by z_(confidence).
     """
 
     def ComputeTheoreticalThreshold(adj_matrices, confidence):
         """
-        Compute theoretical significance threshold for persistence scores.
-        Returns np.inf silently if the computation is not feasible.
+        Compute theoretical significance threshold for persistence scores. Returns np.inf silently if the computation is not feasible.
         """
         T, N, _ = adj_matrices.shape
         if T <= 1:
@@ -437,67 +371,35 @@ def ComputeNodePersistence(tnet, confidence=0.95):
     # Significantly persistent nodes
     persistent_nodes = np.where(persistence_scores > threshold)[0]
 
-    score_percentiles = np.nanpercentile(persistence_scores, [5, 25, 50, 75, 95])
     n_persistent_nodes = len(persistent_nodes)
 
-    return score_percentiles.tolist(), n_persistent_nodes
- 
-    
+    return _summarize_scores(
+        persistence_scores,
+        summary_stat=summary_stat,
+    ), n_persistent_nodes
 
 
-
-def SummarizeSegregationStructure(adjacency_matrices, labels_per_snapshot=None, return_details=False):
+def SummarizeSegregationStructure(
+    adjacency_matrices,
+    labels_per_snapshot=None,
+    return_details=False,
+    summary_stat="median",
+):
     """
     Summarize segregation/cohesion structure of a temporal network (Group 5).
+    This collects structure-focused metrics (not dynamism): global transitivity, median nodewise clustering, median partner stability/diversity, median node persistence plus persistent-node count, and optional modularity/participation summaries.
 
-    This collects structure-focused metrics (NOT dynamism):
-      - Global clustering (transitivity) averaged over time
-      - Nodewise static clustering (time-averaged) → percentiles
-      - Nodewise temporal clustering (time-respecting triangles) → percentiles
-      - Partner stability → percentiles
-      - Partner diversity → percentiles
-      - Node persistence vs. chance → percentiles + count of persistent nodes
-      - (Optional) Modularity and Participation (if labels provided)
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Binary (or weighted where applicable) symmetric temporal adjacency.
+        labels_per_snapshot: np.ndarray or None, shape (T, N), optional. Community labels per node at each snapshot. If provided, modularity and participation metrics are included.
+        return_details: bool, optional (default=False). If True, also returns per-metric raw arrays where available.
+        summary_stat: `median` or `mean` for nodewise summaries.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Binary (or weighted where applicable) symmetric temporal adjacency.
-    labels_per_snapshot : np.ndarray or None, shape (T, N), optional
-        Community labels per node at each snapshot. If provided, modularity and
-        participation metrics are included.
-    return_details : bool, optional (default=False)
-        If True, also returns per-metric raw arrays where available.
+    Returns:
+        summary: dict. Keys always present: `avg_transitivity`, `static_clustering_{summary_stat}`, `temporal_clustering_{summary_stat}`, `partner_stability_{summary_stat}`, `partner_diversity_{summary_stat}`, `node_persistence_{summary_stat}`, and `n_persistent_nodes`. If labels are provided, modularity and participation summaries are also included.
 
-    Returns
-    -------
-    summary : dict
-        Keys (always present):
-          - 'avg_transitivity'            : float
-          - 'static_clustering_pct'       : np.ndarray (5,)   # [5,25,50,75,95]
-          - 'temporal_clustering_pct'     : np.ndarray (5,)
-          - 'partner_stability_pct'       : np.ndarray (5,)
-          - 'partner_diversity_pct'       : np.ndarray (5,)
-          - 'node_persistence_pct'        : np.ndarray (5,)
-          - 'n_persistent_nodes'          : int
-
-        If labels_per_snapshot is provided:
-          - 'avg_modularity'              : float
-          - 'modularity_ts'               : np.ndarray (T,)
-          - 'avg_participation'           : float
-          - 'participation_ts'            : np.ndarray (T, N)
-
-        If return_details is True, may also include:
-          - 'temporal_clustering_scores'  : np.ndarray (N,)      # nodewise (when computed internally)
-          - 'static_clustering_scores'    : np.ndarray (N,)      # nodewise
-          - 'node_persistence_scores'     : np.ndarray (N,)      # nodewise
-
-    Notes
-    -----
-    This summary intentionally excludes *dynamism/memory* metrics such as:
-    edge overlap, edge persistence rate, neighborhood memory, returnability,
-    link burstiness, or mutual information — those are covered in a separate
-    Group 4 summary.
+    Notes:
+        This summary intentionally excludes *dynamism/memory* metrics such as: edge overlap, edge persistence rate, neighborhood memory, returnability, link burstiness, or mutual information — those are covered in a separate Group 4 summary.
     """
     summary = {}
 
@@ -505,26 +407,24 @@ def SummarizeSegregationStructure(adjacency_matrices, labels_per_snapshot=None, 
     avg_transitivity = ComputeTemporalTransitivity(adjacency_matrices)
     summary['avg_transitivity'] = float(avg_transitivity)
 
-    # Nodewise clustering (static & temporal) → percentiles
-    static_clust_pct = ComputeStaticClustering(adjacency_matrices)
-    temporal_clust_pct = ComputeTemporalClustering(adjacency_matrices)
-    summary['static_clustering_pct'] = static_clust_pct
-    summary['temporal_clustering_pct'] = temporal_clust_pct
-
-    # Partner stability & diversity → percentiles
-    partner_stab_pct = ComputePartnerStability(adjacency_matrices)
-    partner_div_pct = ComputePartnerDiversity(adjacency_matrices)
-    summary['partner_stability_pct'] = partner_stab_pct
-    summary['partner_diversity_pct'] = partner_div_pct
-
-    # Node persistence vs chance → percentiles + count
-    node_persist_pct, n_persistent_nodes = ComputeNodePersistence(adjacency_matrices)
-    summary['node_persistence_pct'] = node_persist_pct
+    # Nodewise clustering, partner structure, and persistence → medians
+    summary[f'static_clustering_{summary_stat}'] = ComputeStaticClustering(
+        adjacency_matrices, summary_stat=summary_stat
+    )
+    summary[f'temporal_clustering_{summary_stat}'] = ComputeTemporalClustering(
+        adjacency_matrices, summary_stat=summary_stat
+    )
+    summary[f'partner_stability_{summary_stat}'] = ComputePartnerStability(
+        adjacency_matrices, summary_stat=summary_stat
+    )
+    summary[f'partner_diversity_{summary_stat}'] = ComputePartnerDiversity(
+        adjacency_matrices, summary_stat=summary_stat
+    )
+    node_persist_summary, n_persistent_nodes = ComputeNodePersistence(
+        adjacency_matrices, summary_stat=summary_stat
+    )
+    summary[f'node_persistence_{summary_stat}'] = node_persist_summary
     summary['n_persistent_nodes'] = int(n_persistent_nodes)
 
     return summary
-    
-    
-    
-    
     

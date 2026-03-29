@@ -1,26 +1,20 @@
 import numpy as np
 from scipy import sparse
 
-# ---------- To be imporved  ----------
 
 def EnsureCsr(A):
     """
     Convert an adjacency matrix to a SciPy CSR matrix with zero diagonal.
 
-    Parameters
-    ----------
-    A : array-like or scipy.sparse.spmatrix, shape (N, N)
-        Adjacency matrix (dense or any sparse format).
+    Args:
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Adjacency matrix (dense or any sparse format).
 
-    Returns
-    -------
-    A_csr : scipy.sparse.csr_matrix, shape (N, N)
-        CSR adjacency with dtype float, zeroed diagonal, and no explicit zeros.
+    Returns:
+        A_csr: scipy.sparse.csr_matrix, shape (N, N). CSR adjacency with dtype float, zeroed diagonal, and no explicit zeros.
 
-    Notes
-    -----
-    - Intended for undirected (symmetric) graphs; does not enforce symmetry.
-    - Keeps weights; negative weights are not handled elsewhere in this module.
+    Notes:
+        - Intended for undirected (symmetric) graphs; does not enforce symmetry.
+        - Keeps weights; negative weights are not handled elsewhere in this module.
     """
     if sparse.issparse(A):
         A = A.tocsr()
@@ -36,27 +30,19 @@ def EnsureCsr(A):
 def Modularity(A, labels, gamma=1.0):
     """
     Compute Newman–Girvan modularity (undirected) with resolution parameter γ.
-
     Q_γ = (1 / 2m) * sum_{ij} [ A_ij - γ * (k_i k_j / 2m) ] * δ(c_i, c_j)
 
-    Parameters
-    ----------
-    A : array-like or scipy.sparse.spmatrix, shape (N, N)
-        Symmetric adjacency (binary or weighted). Diagonal is ignored.
-    labels : array-like, shape (N,)
-        Community labels per node.
-    gamma : float, default=1.0
-        Resolution parameter (γ>1 favors smaller communities; γ<1 merges more).
+    Args:
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Symmetric adjacency (binary or weighted). Diagonal is ignored.
+        labels: array-like, shape (N,). Community labels per node.
+        gamma: float, default=1.0. Resolution parameter (γ>1 favors smaller communities; γ<1 merges more).
 
-    Returns
-    -------
-    Q : float
-        Modularity value.
+    Returns:
+        Q: float. Modularity value.
 
-    Notes
-    -----
-    - For sparse A, a dense temporary copy is used for the final block sum;
-      for very large N prefer the snapshot scorers below that aggregate by community.
+    Notes:
+        - For sparse A, a dense temporary copy is used for the final block sum;
+        for very large N prefer the snapshot scorers below that aggregate by community.
     """
     if sparse.issparse(A):
         k = np.asarray(A.sum(axis=1)).ravel()
@@ -82,23 +68,16 @@ def CoarseGrain(A, comm, C):
     """
     Build the coarse (community-level) graph by summing weights between communities.
 
-    Parameters
-    ----------
-    A : scipy.sparse.spmatrix (CSR preferred), shape (n, n)
-        Current-level adjacency.
-    comm : array-like, shape (n,)
-        Community id (0..C-1) of each node at current level.
-    C : int
-        Number of communities at current level.
+    Args:
+        A: scipy.sparse.spmatrix (CSR preferred), shape (n, n). Current-level adjacency.
+        comm: array-like, shape (n,). Community id (0..C-1) of each node at current level.
+        C: int. Number of communities at current level.
 
-    Returns
-    -------
-    A_coarse : scipy.sparse.csr_matrix, shape (C, C)
-        Coarse graph where entry (p, q) is the sum of weights between communities p and q.
+    Returns:
+        A_coarse: scipy.sparse.csr_matrix, shape (C, C). Coarse graph where entry (p, q) is the sum of weights between communities p and q.
 
-    Notes
-    -----
-    - Self-loops on the coarse graph are retained (standard Louvain behavior).
+    Notes:
+        - Self-loops on the coarse graph are retained (standard Louvain behavior).
     """
     A = A.tocsr()
     rows, cols = A.nonzero()
@@ -113,19 +92,13 @@ def AggregateGroups(groups, comm, C):
     """
     Merge lists of original-node indices according to new community assignments.
 
-    Parameters
-    ----------
-    groups : list of 1D np.ndarray
-        At the current level, each entry contains original-node indices of a super-node.
-    comm : array-like, shape (len(groups),)
-        Community id (0..C-1) assigned to each super-node.
-    C : int
-        Number of new communities.
+    Args:
+        groups: list of 1D np.ndarray. At the current level, each entry contains original-node indices of a super-node.
+        comm: array-like, shape (len(groups),). Community id (0..C-1) assigned to each super-node.
+        C: int. Number of new communities.
 
-    Returns
-    -------
-    merged : list of 1D np.ndarray (length C)
-        Each array lists the original-node indices belonging to that community.
+    Returns:
+        merged: list of 1D np.ndarray (length C). Each array lists the original-node indices belonging to that community.
     """
     merged = [list() for _ in range(C)]
     for g_idx, c_id in enumerate(comm):
@@ -137,61 +110,39 @@ def GroupsToLabels(groups, N):
     """
     Convert grouped original-node indices to a dense labels vector.
 
-    Parameters
-    ----------
-    groups : list of 1D np.ndarray
-        Each array contains the original-node indices of one community.
-    N : int
-        Number of original nodes.
+    Args:
+        groups: list of 1D np.ndarray. Each array contains the original-node indices of one community.
+        N: int. Number of original nodes.
 
-    Returns
-    -------
-    labels : np.ndarray, shape (N,), dtype=int
-        Labels 0..C-1 per original node, consistent with `groups`.
+    Returns:
+        labels: np.ndarray, shape (N,), dtype=int. Labels 0..C-1 per original node, consistent with `groups`.
     """
     labels = np.empty(N, dtype=int)
     for c_id, idxs in enumerate(groups):
         labels[idxs] = c_id
     return labels
 
-
-# ---------- Louvain  ----------
-
 def DetectCommunitiesLouvain(A, gamma=1.0, max_passes=100, max_levels=10, tol=1e-7, seed=None):
     """
     Louvain community detection (undirected, weighted) with resolution γ.
+    Implements the two-phase Louvain algorithm (Blondel et al., 2008): (1) local greedy node moves that improve modularity; (2) aggregation into a coarse graph; repeat across levels until improvement < tol or max_levels hit.
 
-    Implements the two-phase Louvain algorithm (Blondel et al., 2008):
-    (1) local greedy node moves that improve modularity; (2) aggregation into a
-    coarse graph; repeat across levels until improvement < tol or max_levels hit.
+    Args:
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Symmetric adjacency (binary or weighted). Diagonal is ignored at the finest level.
+        gamma: float, default=1.0. Modularity resolution parameter.
+        max_passes: int, default=100. Maximum full sweeps of nodes per level during local moving.
+        max_levels: int, default=10. Maximum number of aggregation levels.
+        tol: float, default=1e-7. Minimum modularity gain between levels to continue.
+        seed: int or None, default=None. RNG seed controlling node visitation order.
 
-    Parameters
-    ----------
-    A : array-like or scipy.sparse.spmatrix, shape (N, N)
-        Symmetric adjacency (binary or weighted). Diagonal is ignored at the finest level.
-    gamma : float, default=1.0
-        Modularity resolution parameter.
-    max_passes : int, default=100
-        Maximum full sweeps of nodes per level during local moving.
-    max_levels : int, default=10
-        Maximum number of aggregation levels.
-    tol : float, default=1e-7
-        Minimum modularity gain between levels to continue.
-    seed : int or None, default=None
-        RNG seed controlling node visitation order.
+    Returns:
+        labels: np.ndarray, shape (N,), dtype=int. Community assignment for each original node (0..C-1).
+        Q: float. Modularity (with γ) of the returned partition, computed on the original graph.
 
-    Returns
-    -------
-    labels : np.ndarray, shape (N,), dtype=int
-        Community assignment for each original node (0..C-1).
-    Q : float
-        Modularity (with γ) of the returned partition, computed on the original graph.
-
-    Notes
-    -----
-    - Complexity per pass is O(m) where m is the number of edges.
-    - Deterministic behavior requires setting `seed`; different seeds may yield
-      different but typically similar-Q partitions.
+    Notes:
+        - Complexity per pass is O(m) where m is the number of edges.
+        - Deterministic behavior requires setting `seed`; different seeds may yield
+        different but typically similar-Q partitions.
     """
     rng = np.random.default_rng(seed)
     A = EnsureCsr(A)
@@ -300,22 +251,14 @@ def SnapshotModularity(A, labels, gamma=1.0, directed=False):
     """
     Compute modularity of a single snapshot (undirected or directed).
 
-    Parameters
-    ----------
-    A : array-like or scipy.sparse.spmatrix, shape (N, N)
-        Adjacency matrix. For undirected, should be symmetric; diagonal ignored.
-    labels : array-like, shape (N,)
-        Community labels per node.
-    gamma : float, default=1.0
-        Resolution parameter (undirected or directed variants).
-    directed : bool, default=False
-        If True, uses directed modularity:
-        Q = (1/m) sum_{ij} [ A_ij - γ (k_i^out k_j^in / m) ] δ(c_i, c_j)
+    Args:
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Adjacency matrix. For undirected, should be symmetric; diagonal ignored.
+        labels: array-like, shape (N,). Community labels per node.
+        gamma: float, default=1.0. Resolution parameter (undirected or directed variants).
+        directed: bool, default=False. If True, uses directed modularity: Q = (1/m) sum_{ij} [ A_ij - γ (k_i^out k_j^in / m) ] δ(c_i, c_j)
 
-    Returns
-    -------
-    Q : float
-        Modularity of the partition on this snapshot.
+    Returns:
+        Q: float. Modularity of the partition on this snapshot.
     """
     A = A if sparse.issparse(A) else np.asarray(A, dtype=float)
     labs = np.asarray(labels)
@@ -380,28 +323,17 @@ def ComputeSnapshotModularity(adj_matrix, labels=None, *, gamma=1.0,
     """
     Compute modularity for a single snapshot; auto-detect communities if needed.
 
-    Parameters
-    ----------
-    adj_matrix : array-like or scipy.sparse.spmatrix, shape (N, N)
-        Adjacency of the snapshot. Symmetric for undirected. Weights allowed.
-    labels : None or array-like, shape (N,), default=None
-        If provided, these labels are scored. If None, communities are detected
-        using Louvain (undirected only) with the given `gamma`.
-    gamma : float, default=1.0
-        Modularity resolution parameter.
-    directed : bool, default=False
-        If True, uses directed modularity scoring (no auto-detect; pass labels).
-    detect_method : {'louvain'}, default='louvain'
-        Detection algorithm when `labels` is None.
-    detect_kwargs : dict or None, default=None
-        Extra keyword arguments forwarded to the detector (e.g., {'seed': 42}).
+    Args:
+        adj_matrix: array-like or scipy.sparse.spmatrix, shape (N, N). Adjacency of the snapshot. Symmetric for undirected. Weights allowed.
+        labels: None or array-like, shape (N,), default=None. If provided, these labels are scored. If None, communities are detected using Louvain (undirected only) with the given `gamma`.
+        gamma: float, default=1.0. Modularity resolution parameter.
+        directed: bool, default=False. If True, uses directed modularity scoring (no auto-detect; pass labels).
+        detect_method: {'louvain'}, default='louvain'. Detection algorithm when `labels` is None.
+        detect_kwargs: dict or None, default=None. Extra keyword arguments forwarded to the detector (e.g., {'seed': 42}).
 
-    Returns
-    -------
-    Q : float
-        Modularity value for this snapshot.
-    used_labels : np.ndarray, shape (N,)
-        Labels that were scored (provided or auto-detected).
+    Returns:
+        Q: float. Modularity value for this snapshot.
+        used_labels: np.ndarray, shape (N,). Labels that were scored (provided or auto-detected).
     """
     if labels is None:
         if directed:
@@ -424,36 +356,22 @@ def ComputeTemporalModularity(adjacency_matrices, labels_per_snapshot=None, *,
     """
     Compute mean modularity across time; score provided labels or auto-detect per snapshot.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray or list, shape (T, N, N) or list of (N, N)
-        Sequence of T snapshots (binary or weighted). Symmetric for undirected.
-    labels_per_snapshot : None, (N,), or (T, N), default=None
-        - None: auto-detect (Louvain) labels independently at each snapshot (undirected only).
-        - (N,): a single static partition reused for all T snapshots.
-        - (T, N): per-snapshot labels supplied by the caller.
-    gamma : float, default=1.0
-        Modularity resolution parameter.
-    directed : bool, default=False
-        If True, uses directed modularity scoring (no auto-detect).
-    detect_method : {'louvain'}, default='louvain'
-        Detection algorithm when labels are not supplied (undirected only).
-    detect_kwargs : dict or None, default=None
-        Extra keyword arguments forwarded to the detector (e.g., {'seed': 42}).
+    Args:
+        adjacency_matrices: np.ndarray or list, shape (T, N, N) or list of (N, N). Sequence of T snapshots (binary or weighted). Symmetric for undirected.
+        labels_per_snapshot: None, (N,), or (T, N), default=None. - None: auto-detect (Louvain) labels independently at each snapshot (undirected only). - (N,): a single static partition reused for all T snapshots. - (T, N): per-snapshot labels supplied by the caller.
+        gamma: float, default=1.0. Modularity resolution parameter.
+        directed: bool, default=False. If True, uses directed modularity scoring (no auto-detect).
+        detect_method: {'louvain'}, default='louvain'. Detection algorithm when labels are not supplied (undirected only).
+        detect_kwargs: dict or None, default=None. Extra keyword arguments forwarded to the detector (e.g., {'seed': 42}).
 
-    Returns
-    -------
-    avg_Q : float
-        Mean modularity over snapshots.
-    Qs : np.ndarray, shape (T,)
-        Per-snapshot modularity values.
-    out_labels_per_snapshot : np.ndarray, shape (T, N)
-        Labels used/scored at each snapshot (detected or provided).
+    Returns:
+        avg_Q: float. Mean modularity over snapshots.
+        Qs: np.ndarray, shape (T,). Per-snapshot modularity values.
+        out_labels_per_snapshot: np.ndarray, shape (T, N). Labels used/scored at each snapshot (detected or provided).
 
-    Notes
-    -----
-    - For a persistence-aware objective (ω coupling across time), use a multilayer
-      optimizer/scorer instead of averaging snapshot modularities.
+    Notes:
+        - For a persistence-aware objective (ω coupling across time), use a multilayer
+        optimizer/scorer instead of averaging snapshot modularities.
     """
     mats = adjacency_matrices
     if isinstance(mats, np.ndarray) and mats.ndim == 3 and not sparse.issparse(mats):

@@ -3,29 +3,17 @@ import numpy as np
 
 def GenerateSymmetricRandomNetwork(n_nodes, n_edges):
     """
-    Create a symmetric random network with a full diagonal.
+    Build a symmetric random adjacency with a full diagonal.
 
-    This function generates an undirected random adjacency matrix with 
-    a specified number of edges. The diagonal is fully filled with ones, 
-    representing self-connections.
+    Args:
+        n_nodes: Number of nodes.
+        n_edges: Number of undirected off-diagonal edges.
 
-    Parameters
-    ----------
-    n_nodes : int
-        Number of nodes in the network (size of the adjacency matrix).
-    n_edges : int
-        Number of undirected edges to include (not counting the diagonal).
-
-    Returns
-    -------
-    np.ndarray
-        Symmetric adjacency matrix of shape (n_nodes, n_nodes), 
-        with `n_edges` undirected edges and a full diagonal of ones.
+    Returns:
+        Symmetric `(n_nodes, n_nodes)` adjacency with diagonal ones.
     """
     src, tgt = np.tril_indices(n_nodes, -1)  # lower-triangular indices
-    # all_edges = np.column_stack((src, tgt))
     selected_edges = np.random.permutation(np.column_stack((src, tgt)))[:n_edges]
-    # np.random.shuffle(all_edges)
 
     selected_src, selected_tgt = selected_edges.T
     adj_matrix = np.zeros((n_nodes, n_nodes), dtype=int)
@@ -42,46 +30,16 @@ def GenerateSymmetricRandomNetwork(n_nodes, n_edges):
 
 def GenerateSymmetricSmallWorldNetwork(n_nodes, n_edges, rewire_prob=0.02, seed=None):
     """
-    Create a symmetric small-world-like random network with a full diagonal.
+    Build a symmetric small-world-style adjacency with diagonal ones.
 
-    This constructs an undirected adjacency matrix by:
-      1) Enumerating all unordered node pairs sorted by their circular distance
-         (nearby pairs first), which approximates a lattice-style backbone.
-      2) Selecting the first `n_edges` pairs as the initial edge set.
-      3) Rewiring a fraction (`rewire_prob`) of those edges to uniformly
-         random non-chosen pairs, while preserving symmetry.
-      4) Filling the diagonal with ones (self-connections).
+    Args:
+        n_nodes: Number of nodes.
+        n_edges: Number of undirected off-diagonal edges.
+        rewire_prob: Fraction of initially local edges to rewire.
+        seed: Optional RNG seed.
 
-    Notes
-    -----
-    - This is a lightweight small-world *approximation* that emulates
-      "local-first, then some random shortcuts" behavior. It is not a
-      canonical Watts–Strogatz generator, but it preserves your original
-      ordering-by-offset approach and behavior.
-    - The resulting matrix is symmetric with a full diagonal of ones.
-
-    Parameters
-    ----------
-    n_nodes : int
-        Number of nodes in the network (size of the adjacency matrix).
-    n_edges : int
-        Number of undirected edges to include (not counting the diagonal).
-    rewire_prob : float, optional (default=0.02)
-        Fraction of the initially selected edges to rewire uniformly at random.
-    seed : int or None, optional (default=None)
-        Random seed for reproducibility. If None, the global RNG state is used.
-
-    Returns
-    -------
-    np.ndarray
-        Symmetric adjacency matrix of shape (n_nodes, n_nodes), with `n_edges`
-        undirected edges and a full diagonal of ones.
-
-    Raises
-    ------
-    ValueError
-        If `n_edges` exceeds the maximum possible number of undirected pairs
-        for `n_nodes`.
+    Returns:
+        Symmetric `(n_nodes, n_nodes)` adjacency with diagonal ones.
     """
     if seed is not None:
         np.random.seed(seed)
@@ -136,66 +94,20 @@ def GenerateSymmetricSmallWorldNetwork(n_nodes, n_edges, rewire_prob=0.02, seed=
     return adj_matrix
 
 
-import numpy as np
-
-def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.5, a=0.1, alpha=0.5):
+def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, gamma=2.5):
     """
-    Create a symmetric scale-free-like random network with a full diagonal.
+    Build a symmetric power-law scale-free adjacency with diagonal ones.
 
-    This constructs an undirected adjacency matrix by assigning probabilities 
-    to nodes based on the chosen preferential attachment model. Edges are then 
-    sampled according to these preferences.
+    Args:
+        n_nodes: Number of nodes.
+        n_edges: Number of undirected off-diagonal edges.
+        gamma: Power-law exponent used for node preference weights.
 
-    Models supported
-    ----------------
-    - 'sf_linear'       : Linear decay preference (higher index = lower prob).
-    - 'sf_exponential'  : Exponential decay with parameter `a`.
-    - 'sf_powerlaw'     : Power-law decay with exponent `gamma`.
-    - 'sf_hybrid'       : Combination of linear and power-law controlled by `alpha`.
-
-    Parameters
-    ----------
-    n_nodes : int
-        Number of nodes in the network (size of the adjacency matrix).
-    n_edges : int
-        Number of undirected edges to include (not counting the diagonal).
-    model : str, optional (default='linear')
-        Preference model ('sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid').
-    gamma : float, optional (default=2.5)
-        Exponent for the power-law preference model.
-    a : float, optional (default=0.1)
-        Decay parameter for the exponential preference model.
-    alpha : float, optional (default=0.5)
-        Mixing parameter for the hybrid model (0 = pure linear, 1 = pure power-law).
-
-    Returns
-    -------
-    np.ndarray
-        Symmetric adjacency matrix of shape (n_nodes, n_nodes), 
-        with `n_edges` undirected edges and a full diagonal of ones.
-
-    Raises
-    ------
-    ValueError
-        If the provided `model` is not recognized.
+    Returns:
+        Symmetric `(n_nodes, n_nodes)` adjacency with diagonal ones.
     """
     indices = np.arange(1, n_nodes + 1)  # 1-based indexing for preference formulas
-
-    # Generate node preference weights
-    if model == 'sf_linear':
-        pref_values = n_nodes - indices + 1
-    elif model == 'sf_exponential':
-        pref_values = np.exp(-a * (indices - 1))
-    elif model in ['sf_powerlaw', 'sf']:
-        pref_values = indices ** (-gamma)
-    elif model == 'sf_hybrid':
-        linear = n_nodes - indices + 1
-        powerlaw = indices ** (-gamma)
-        pref_values = alpha * powerlaw + (1 - alpha) * linear
-    else:
-        raise ValueError("Unknown model type. Choose from "
-                         "'sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid'.")
-
+    pref_values = indices ** (-gamma)
     prefs = pref_values / pref_values.sum()  # Normalize to a probability distribution
 
     # Generate all possible undirected edges
@@ -221,44 +133,25 @@ def GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model='linear', gamma=2.
     return adj_matrix
 
 
-
-
 def GenerateSymmetricNetwork(n_nodes, n_edges, kind, seed=None):
     """
-    Generate a symmetric network with a full diagonal, based on the specified model type.
+    Dispatch to an ER, small-world, or scale-free generator.
 
-    This function serves as a wrapper to construct different network topologies:
-    - Erdős–Rényi random network
-    - Small-world network
-    - Scale-free network (various preference models)
+    Args:
+        n_nodes: Number of nodes.
+        n_edges: Number of undirected off-diagonal edges.
+        kind: One of `er`, `sw`, or `sf`.
+        seed: Optional RNG seed.
 
-    Parameters
-    ----------
-    n_nodes : int
-        Number of nodes in the network (size of the adjacency matrix).
-    n_edges : int
-        Number of undirected edges to include (not counting the diagonal).
-    kind : str
-        Type of network to generate. Supported values:
-        - 'er', 'er_static', 'static'  → Erdős–Rényi random network
-        - 'sw', 'sw_static'            → Small-world network
-        - 'sf', 'sf_linear', 
-          'sf_exponential', 
-          'sf_powerlaw', 
-          'sf_hybrid'                  → Scale-free network
-
-    Returns
-    -------
-    np.ndarray
-        Symmetric adjacency matrix of shape (n_nodes, n_nodes),
-        with the chosen topology and a full diagonal of ones.
+    Returns:
+        Symmetric `(n_nodes, n_nodes)` adjacency with diagonal ones.
     """
-    if kind in ['er', 'er_static', 'static']:
+    if kind == 'er':
         adj_matrix = GenerateSymmetricRandomNetwork(n_nodes, n_edges)
-    elif kind in ['sw', 'sw_static']:
+    elif kind == 'sw':
         adj_matrix = GenerateSymmetricSmallWorldNetwork(n_nodes, n_edges)
-    elif kind in ['sf', 'sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid']:
-        adj_matrix = GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges, model=kind)
+    elif kind == 'sf':
+        adj_matrix = GenerateSymmetricScaleFreeNetwork(n_nodes, n_edges)
     else:
         raise ValueError(f"Unknown network type '{kind}'.")
     
@@ -267,38 +160,15 @@ def GenerateSymmetricNetwork(n_nodes, n_edges, kind, seed=None):
 
 def GenerateStaticTemporalNetwork(tnet_init, kind, seed=None):
     """
-    Generate a static temporal network of a specified topology with a full diagonal.
+    Repeat one static snapshot across all time points.
 
-    This function constructs a temporal network where each snapshot 
-    is identical, based on a chosen static network model 
-    (Erdős–Rényi, small-world, or scale-free). 
+    Args:
+        tnet_init: Reference temporal network of shape `(T, N, N)`.
+        kind: One of `er`, `sw`, or `sf`.
+        seed: Optional RNG seed.
 
-    The number of edges per snapshot is estimated from the provided 
-    temporal network template `tnet_init`.
-
-    Parameters
-    ----------
-    tnet_init : np.ndarray
-        Temporal network array of shape (T, N, N) used only to determine
-        the number of time steps (T), number of nodes (N), 
-        and approximate number of edges per snapshot.
-    kind : str
-        Type of network to generate. Supported values are the same as in 
-        `GenerateSymmetricNetwork`:
-        - 'er', 'er_static', 'static'  → Erdős–Rényi random network
-        - 'sw', 'sw_static'            → Small-world network
-        - 'sf', 'sf_linear', 
-          'sf_exponential', 
-          'sf_powerlaw', 
-          'sf_hybrid'                  → Scale-free network
-    seed : int or None, optional (default=None)
-        Random seed for reproducibility. Passed to the underlying generator.
-
-    Returns
-    -------
-    np.ndarray
-        Temporal network of shape (T, N, N), where each snapshot is the same 
-        symmetric adjacency matrix with a full diagonal of ones.
+    Returns:
+        Temporal network of shape `(T, N, N)`.
     """
     T, n_nodes, _ = tnet_init.shape
 
@@ -314,32 +184,18 @@ def GenerateStaticTemporalNetwork(tnet_init, kind, seed=None):
     return tnet
 
 
-
-
-
 def GenerateTemporalLinkCounts(target_mean, target_sigma, n_snapshots, max_attempts=2000): 
-    #generate_temporal_link_counts():
     """
-    Generate an array of link counts per snapshot with a specified mean and standard deviation.
+    Match per-snapshot link counts to a target mean and spread.
 
-    The function attempts to match the target standard deviation by iterative redistribution
-    while preserving the total number of links and avoiding negative link counts.
+    Args:
+        target_mean: Desired mean link count.
+        target_sigma: Desired standard deviation.
+        n_snapshots: Number of snapshots.
+        max_attempts: Maximum redistribution attempts.
 
-    Parameters
-    ----------
-    target_mean : float
-        Desired average number of links per snapshot.
-    target_sigma : float
-        Desired standard deviation of link counts across snapshots.
-    n_snapshots : int
-        Number of time snapshots (length of output array).
-    max_attempts : int, optional
-        Maximum number of adjustment attempts (default: 2000).
-
-    Returns
-    -------
-    link_counts : array, shape (n_snapshots,)
-        Array of link counts per snapshot.
+    Returns:
+        Integer array of length `n_snapshots`.
     """
     adjust_value = int(np.round(target_mean / 4))
     total_links = int(np.round(target_mean * n_snapshots))
@@ -415,51 +271,29 @@ def GenerateTemporalLinkCounts(target_mean, target_sigma, n_snapshots, max_attem
 
     return closest_arr
 
-def GenerateTnetWithDensityVariation(tnet0, variation_type, sigma=0, scale=1): 
-    #generate_temporal_network_with_density_variation
+
+def GenerateTemporalNetworkWithDensityVariation(tnet0, variation_type="uniform"):
     """
-    Generate a cloned version of a temporal network with controlled density variability.
+    Regenerate a temporal network with uniform edge counts across time.
 
-    The output temporal network has the same number of nodes and snapshots,
-    but the number of active edges per snapshot varies according to the specified scheme.
+    Args:
+        tnet0: Reference temporal network of shape `(T, N, N)`.
+        variation_type: Must be `uniform`.
 
-    Parameters
-    ----------
-    tnet0 : array, shape (T, N, N)
-        Reference temporal network to clone structure from.
-    variation_type : str
-        Type of variability:
-        - 'desiredSigmaRho': use a user-specified sigma
-        - 'sig_isMean': set sigma = mean number of edges
-        - 'sig_halfMean': set sigma = 0.5 * mean number of edges
-        - 'sig_quarterMean': set sigma = 0.25 * mean number of edges
-    sigma : float, optional
-        Standard deviation for edge count variability if using 'desiredSigmaRho' (default: 0).
-    scale : float, optional
-        Scaling factor to apply to mean when using proportional types (default: 1).
-
-    Returns
-    -------
-    new_tnet : array, shape (T, N, N)
-        Temporal network with modified density variability.
+    Returns:
+        Temporal network of shape `(T, N, N)`.
     """
+    if variation_type != "uniform":
+        raise ValueError("variation_type must be 'uniform'.")
+
     T, N, _ = tnet0.shape
-    
+
     # Compute original number of edges per snapshot
     n_edges_per_snapshot = (np.sum(tnet0, axis=(1, 2)) - N) // 2  # undirected graph correction
     mean_edges = np.mean(n_edges_per_snapshot)
-    std_edges = np.std(n_edges_per_snapshot)
-
-    # Set desired standard deviation
-    if variation_type == 'desiredSigmaRho':
-        target_std = sigma
-    elif variation_type in ['sig_isMean', 'sig_halfMean', 'sig_quarterMean']:
-        target_std = scale * mean_edges
-    else:
-        raise ValueError(f"Unknown variation_type: {variation_type}")
 
     # Generate new edge counts
-    new_edge_counts = GenerateTemporalLinkCounts(mean_edges, target_std, T)
+    new_edge_counts = GenerateTemporalLinkCounts(mean_edges, 0, T)
 
     # Generate new temporal network
     new_tnet = np.zeros((T, N, N), dtype=int)
@@ -469,40 +303,16 @@ def GenerateTnetWithDensityVariation(tnet0, variation_type, sigma=0, scale=1):
     return new_tnet
 
 
-
 def GenerateTemporalNetworkByLinkActivation(tnet_init, seed=None):
     """
-    Generate a null temporal network by preserving per-edge activation counts.
+    Shuffle edge activation times while preserving per-edge totals.
 
-    For each undirected edge (i < j), this function:
-      1) Counts how many time frames the edge is active in `tnet_init`.
-      2) Randomly selects exactly that many distinct time frames.
-      3) Activates the edge at those selected frames.
-    All snapshots have a full diagonal of ones. This preserves the
-    marginal activation count (over time) of every edge while randomizing
-    *when* the activations occur.
+    Args:
+        tnet_init: Binary temporal network of shape `(T, N, N)`.
+        seed: Optional RNG seed.
 
-    Parameters
-    ----------
-    tnet_init : np.ndarray
-        Input temporal network of shape (T, N, N). Assumed to be binary and
-        symmetric per snapshot, with diagonal typically ones.
-    seed : int or None, optional (default=None)
-        Seed for reproducibility. If provided, uses a dedicated RNG.
-
-    Returns
-    -------
-    np.ndarray
-        Temporal network of shape (T, N, N) constructed by randomizing the
-        timing of each edge's activations while preserving total counts.
-
-    Notes
-    -----
-    - The procedure uses only the lower-triangular part (i < j) to avoid
-      double-counting undirected edges, then mirrors to enforce symmetry.
-    - If `tnet_init` contains only 0/1 entries, each edge's activation
-      count is guaranteed to be in [0, T], so sampling without replacement
-      is always valid.
+    Returns:
+        Temporal network of shape `(T, N, N)`.
     """
     rng = np.random.default_rng(seed)
 
@@ -532,41 +342,182 @@ def GenerateTemporalNetworkByLinkActivation(tnet_init, seed=None):
     return tnet
 
 
+def GenerateTemporalNetworkFromEdgeTemplate(
+    otnet,
+    tag,
+    p_rewire=0.02,
+    seed=None,
+    alpha_rank=1.0,
+    exclude_never_active=True,
+    eta_readd=1.0,
+):
+    """
+    Build a temporal network from an empirical or random ranked edge template.
+
+    Args:
+        otnet: Reference temporal network of shape `(T, N, N)`.
+        tag: `eActTemplate` or `eRndTemplate`.
+        p_rewire: Fraction of template edges rewired per frame.
+        seed: Optional RNG seed.
+        alpha_rank: Rank-decay exponent.
+        exclude_never_active: If `True`, `eActTemplate` ignores never-active edges.
+        eta_readd: Weight multiplier for re-adding removed edges.
+
+    Returns:
+        Tuple `(tnet_out, n_final_core_nodes)`.
+    """
+    if not (0.0 <= p_rewire <= 1.0):
+        raise ValueError("`p_rewire` must be in [0, 1].")
+    if eta_readd <= 0:
+        raise ValueError("`eta_readd` must be > 0.")
+    if alpha_rank < 0:
+        raise ValueError("`alpha_rank` must be >= 0.")
+    if otnet.ndim != 3 or otnet.shape[1] != otnet.shape[2]:
+        raise ValueError("`otnet` must have shape (T, N, N).")
+    if tag not in {"eActTemplate", "eRndTemplate"}:
+        raise ValueError('tag must be "eActTemplate" or "eRndTemplate".')
+
+    rng = np.random.default_rng(seed)
+
+    T, N, _ = otnet.shape
+    work = np.array(otnet, copy=True)
+    diag = np.arange(N)
+    work[:, diag, diag] = 0
+
+    lower_pairs = np.column_stack(np.tril_indices(N, k=-1))
+    r_idx, c_idx = lower_pairs.T
+    n_pair_edges = len(lower_pairs)
+
+    edge_activation = work[:, r_idx, c_idx]
+    nedges = edge_activation.sum(axis=1).astype(int)
+    ne_max = int(nedges.max()) if T else 0
+
+    if ne_max == 0:
+        out = np.tile(np.eye(N, dtype=np.uint8), (T, 1, 1))
+        return out, N
+
+    total_per_edge = edge_activation.sum(axis=0).astype(int)
+    if tag == "eActTemplate":
+        order = np.argsort(total_per_edge)[::-1]
+    else:
+        order = rng.permutation(n_pair_edges)
+
+    rank = np.empty(n_pair_edges, dtype=int)
+    rank[order] = np.arange(n_pair_edges)
+
+    main_ids = order[:ne_max]
+    rem_ids = order[ne_max:]
+
+    unique_k = np.unique(nedges)
+    unique_k = unique_k[unique_k > 0]
+
+    non_selected_by_k = {}
+    w_non_by_k = {}
+
+    for k in unique_k:
+        k = int(k)
+        non_sel = np.concatenate((main_ids[k:], rem_ids), axis=0)
+        non_selected_by_k[k] = non_sel
+
+        if len(non_sel) == 0:
+            w_non_by_k[k] = None
+            continue
+
+        weights = 1.0 / ((rank[non_sel].astype(float) + 1.0) ** alpha_rank)
+        if tag == "eActTemplate" and exclude_never_active:
+            weights = weights * (total_per_edge[non_sel] > 0)
+
+        w_non_by_k[k] = weights
+
+    out = np.zeros((T, N, N), dtype=np.uint8)
+
+    for t in range(T):
+        k = int(nedges[t])
+
+        if k <= 0:
+            np.fill_diagonal(out[t], 1)
+            continue
+
+        selected_ids = main_ids[:k]
+
+        r = int(p_rewire * k)
+
+        if r > 0:
+            r = min(r, k)
+
+            replace_pos = rng.permutation(k)[:r]
+            to_replace_ids = selected_ids[replace_pos]
+
+            keep_mask = np.ones(k, dtype=bool)
+            keep_mask[replace_pos] = False
+            kept_ids = selected_ids[keep_mask]
+
+            non_sel = non_selected_by_k.get(k)
+            w_non = w_non_by_k.get(k)
+
+            if non_sel is None or w_non is None:
+                pool_ids = to_replace_ids.copy()
+                w_pool = np.ones(len(pool_ids), dtype=float)
+
+            else:
+                w_non_local = w_non.astype(float)
+
+                w_rep = 1.0 / ((rank[to_replace_ids].astype(float) + 1.0) ** alpha_rank)
+                if tag == "eActTemplate" and exclude_never_active:
+                    w_rep = w_rep * (total_per_edge[to_replace_ids] > 0)
+
+                pool_ids = np.concatenate((non_sel, to_replace_ids))
+                w_pool = np.concatenate((w_non_local, eta_readd * w_rep)).astype(float)
+
+            pos = np.flatnonzero(w_pool > 0)
+            if len(pos) < r:
+                add_pos = rng.choice(len(pool_ids), size=r, replace=False)
+            else:
+                w_pos = w_pool[pos].astype(float)
+                s = w_pos.sum()
+                if s <= 0 or not np.isfinite(s):
+                    add_pos = rng.choice(len(pool_ids), size=r, replace=False)
+                else:
+                    p_pos = w_pos / s
+                    add_pos = pos[rng.choice(len(pos), size=r, replace=False, p=p_pos)]
+
+            add_ids = pool_ids[add_pos]
+            selected_ids = np.concatenate((kept_ids, add_ids), axis=0)
+
+        rr, cc = lower_pairs[selected_ids].T
+        out[t, rr, cc] = 1
+        out[t, cc, rr] = 1
+        np.fill_diagonal(out[t], 1)
+
+    T, N, _ = out.shape
+    tnet_final_core, n_final_core_nodes = TrimIsolatedNodes(out)
+
+    if N != n_final_core_nodes:
+        tnet_out = np.tile(np.eye(N, dtype=np.uint8), (T, 1, 1))
+        tnet_out[:, :n_final_core_nodes, :n_final_core_nodes] = tnet_final_core
+    else:
+        tnet_out = out
+
+    return tnet_out, n_final_core_nodes
+#### <<<<templates end
+
+
+
+
+
+
+
+
+
 
 def TrimIsolatedNodes(tnet):
     """
-    Remove isolated nodes (across all time frames) from a temporal network.
-
-    A node is considered isolated if, over the entire time horizon, it has
-    no incident edges to any other node (self-loops on the diagonal are ignored).
-    The function trims such nodes from the adjacency cubes and returns the
-    reduced temporal network along with the number of active (non-isolated) nodes.
-
-    Parameters
-    ----------
-    tnet : np.ndarray
-        Temporal network of shape (T, N, N). Each snapshot is assumed to be
-        symmetric and typically has ones on the diagonal.
-
-    Returns
-    -------
-    tnet_trimmed : np.ndarray
-        Temporal network of shape (T, M, M), where M ≤ N is the number of
-        non-isolated nodes retained.
-    n_active : int
-        The number of active (non-isolated) nodes after trimming.
-
-    Notes
-    -----
-    - Isolation is determined by aggregating adjacency over time (sum over T),
-      zeroing the diagonal, and checking which nodes have any nonzero incident
-      links. This matches the original behavior.
+    Remove nodes that never connect to any other node across time.
     """
     tnet_copy = tnet.copy()
     n_nodes = tnet_copy.shape[-1]
 
-    # Aggregate across time and ignore diagonal to assess isolation
-    aggregated = tnet_copy.sum(axis=0)         # shape (N, N)
+    aggregated = tnet_copy.sum(axis=0)
     np.fill_diagonal(aggregated, 0)
     incident_sum = aggregated.sum(axis=0).astype(int)
 
@@ -581,66 +532,22 @@ def TrimIsolatedNodes(tnet):
     return tnet_copy, n_active
 
 
-def GenerateNullModel(tnet, tag, scale=1, seed=None):
+def GenerateNullModel(tnet, tag, scale=1, seed=None, **kwargs):
     """
-    Generate a null-model temporal network from a given temporal network.
+    Generate a temporal null model from `tnet`.
 
-    This wrapper supports multiple null-model types (selected via `tag`) that
-    randomize different aspects of the input network while preserving certain
-    constraints (e.g., number of edges per snapshot, activation counts, etc.).
-    If `trimIsolated` removes isolated nodes, the result is padded back to the
-    original size with identity blocks on the diagonal.
+    Supported tags:
+        `original`, `emp_static`, `er_static`, `sw_static`, `sf_static`, `time`, `eAct`, `uniform`, `eActTemplate`, `eRndTemplate`, `erand_er`, `erand_sws`, `erand_sfs`, `erand_swr`, `erand_sfr`.
 
-    Supported tags
-    --------------
-    'original'       : Return the trimmed input as-is (no changes).
-    'static'         : Same static snapshot repeated across time (ER by default).
-    'er_static'      : Alias for 'static' (explicit ER static).
-    'sw_static'      : Static small-world snapshot repeated across time.
-    'sf_linear'      : Static scale-free (linear preference) snapshot repeated.
-    'sf_exponential' : Static scale-free (exponential preference) snapshot repeated.
-    'sf_powerlaw'    : Static scale-free (power-law) snapshot repeated.
-    'sf_hybrid'      : Static scale-free (hybrid) snapshot repeated.
-    'time'           : Time-reshuffle snapshots (random permutation of frames).
-    'edges'          : For each frame, regenerate an ER snapshot preserving that
-                       frame's edge count.
-    'edgetime'       : First 'time' reshuffle, then 'edges'.
-    'linkActivation' : Preserve per-edge activation counts across time but
-                       randomize the specific time indices of activation.
-    'desiredSigmaRho', 'sig_isMean', 'sig_halfMean', 'sig_quarterMean'
-                     : Re-generate ER snapshots with per-frame edge counts drawn
-                       to match the original mean and a chosen variability (σ).
+    Args:
+        tnet: Input temporal network of shape `(T, N, N)`.
+        tag: Null-model identifier.
+        scale: Unused legacy argument kept for compatibility.
+        seed: Optional RNG seed.
+        **kwargs: Extra options forwarded to template-based generators.
 
-    Parameters
-    ----------
-    tnet : np.ndarray
-        Input temporal network, shape (T, N, N), assumed binary and symmetric
-        with ones on the diagonal.
-    tag : str
-        Specifies which null-model to generate (see "Supported tags").
-    scale : float, optional (default=1)
-        Scale factor used when `tag` is one of the sigma-modes. Ignored otherwise.
-    seed : int or None, optional (default=None)
-        Random seed for reproducibility. Passed to underlying generators and used
-        for shuffles in-place here.
-
-    Returns
-    -------
-    tnet_out : np.ndarray
-        Output temporal network, shape (T, N, N), padded back to the original N
-        if isolated nodes were trimmed.
-    n_core_nodes : int
-        The size of the core (non-isolated) node set after trimming.
-
-    Notes
-    -----
-    - Requires auxiliary functions:
-        * trimIsolatedNodes(tnet) -> (tnet_trimmed, n_core_nodes)
-        * GenerateSymmetricNetwork(n_nodes, n_edges, kind, seed=None)
-        * GenerateStaticTemporalNetwork(tnet_init, kind, seed=None)
-        * GenerateTemporalNetworkByLinkActivation(tnet_init, seed=None)
-        * GenerateTemporalNetworkWithDensityVariability(tnet_init, sigma_mode, scale, sigma=0)
-    - The diagonal is kept as ones in all outputs.
+    Returns:
+        Tuple `(tnet_out, n_final_core_nodes)`.
     """
     # Preserve original dimensions for padding at the end
     T, n_nodes, _ = np.shape(tnet)
@@ -650,13 +557,14 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
 
     # Tag groups
     erand_group = ['erand_er', 'erand_sws', 'erand_sfs', 'erand_swr', 'erand_sfr']
-    sfsw_static = ['sf_linear', 'sf_exponential', 'sf_powerlaw', 'sf_hybrid', 'sw_static', 'static', 'er_static']
-    sigma_modes = ['desiredSigmaRho', 'sig_isMean', 'sig_halfMean', 'sig_quarterMean']
-    sigma_scales = [1.0, 2.0, 0.5, 0.25]  # parallel to sigma_modes
-    
+    static_tag_to_kind = {
+        'er_static': 'er',
+        'sw_static': 'sw',
+        'sf_static': 'sf',
+    }
     rng = np.random.default_rng(seed)
 
-    if tag == 'original':
+    if tag == 'original' or tag == 'emp_static':
         tnet_result = tnet_core
 
     elif tag == 'time':
@@ -666,45 +574,53 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
         tnet_result = tnet_core[time_idx, :, :]
 
     elif tag in erand_group: 
-        # Preserve per-frame edge counts, regenerate ER snapshot per frame
-        # Count edges per frame (exclude diagonal)
+        # Preserve per-frame edge counts, regenerate snapshot per frame
         identifier = tag.split('_')[1]
         kind = identifier[:2]
         edge_counts = ((tnet_core.sum(axis=(1, 2)) - n_core_nodes) // 2).astype(int)
         tnet_result0 = np.zeros((T, n_core_nodes, n_core_nodes), dtype=int)
         for t_idx, n_edges in enumerate(edge_counts):
-            tnet_result0[t_idx] = GenerateSymmetricNetwork(n_core_nodes, int(n_edges), kind=kind, seed=seed)
-        if identifier[0]== 's' and identifier[-1]=='r': # reindex/relable to distroy persistence by construction 
+            tnet_result0[t_idx] = GenerateSymmetricNetwork(
+                n_core_nodes, int(n_edges), kind=kind, seed=seed
+            )
+        if identifier[0] == 's' and identifier[-1] == 'r':  # relabel to destroy persistence by construction
             tnet_result = np.empty_like(tnet_result0)
             for t, mtx in enumerate(tnet_result0):
                 perm = np.random.permutation(n_core_nodes)
-                tnet_result[t] = mtx[perm][:,perm] 
+                tnet_result[t] = mtx[perm][:, perm]
         else:
             tnet_result = tnet_result0
-    elif tag == 'edgetime':
-        # First shuffle time, then re-generate edges per frame
-        tnet_time, _ = GenerateNullModel(tnet_core.copy(), 'time', seed=seed)
-        tnet_result, _ = GenerateNullModel(tnet_time.copy(), 'edges', seed=seed)
 
-    elif tag == 'linkActivation':
+    elif tag == 'eAct':
         tnet_result = GenerateTemporalNetworkByLinkActivation(tnet_core, seed=seed)
 
-    elif tag in sigma_modes:
-        # Map tag to its default scale if caller didn't supply a custom one
-        default_scale = sigma_scales[sigma_modes.index(tag)]
-        use_scale = scale if scale is not None else default_scale
-        tnet_result = GenerateTnetWithDensityVariation(tnet_core, variation_type=tag, sigma=0, scale=use_scale)
+    elif tag == 'uniform':
+        tnet_result = GenerateTemporalNetworkWithDensityVariation(
+            tnet_core,
+            variation_type='uniform',
+        )
 
-    elif tag in sfsw_static:
-        # Static small-world / scale-free snapshots repeated
-        tnet_result = GenerateStaticTemporalNetwork(tnet_core, kind=tag, seed=seed)
+    elif tag in static_tag_to_kind:
+        # Static snapshot repeated across time.
+        tnet_result = GenerateStaticTemporalNetwork(
+            tnet_core, kind=static_tag_to_kind[tag], seed=seed
+        )
+
+    elif tag in ['eActTemplate', 'eRndTemplate']:
+        tnet_result, _ = GenerateTemporalNetworkFromEdgeTemplate(
+            tnet_core,
+            tag=tag,
+            p_rewire=kwargs.get('p_rewire', 0.02),
+            seed=seed,
+            alpha_rank=kwargs.get('alpha_rank', 1.0),
+            exclude_never_active=kwargs.get('exclude_never_active', True),
+            eta_readd=kwargs.get('eta_readd', 1.0),
+        )
 
     else:
         raise ValueError("Unrecognized tag value for null-model generation.")
 
     tnet_final_core, n_final_core_nodes = TrimIsolatedNodes(tnet_result)
-    
-    # If isolated nodes were trimmed away, pad result back to original size
     
     if n_nodes != n_final_core_nodes:
         tnet_out = np.tile(np.eye(n_nodes, dtype=int), (T, 1, 1))
@@ -715,36 +631,22 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None):
     return tnet_out, n_final_core_nodes
 
 
-
-
 def generateRandomTemporalNetwork(t, n, pconn):
     """
     Generate a symmetric random temporal network.
+    This function creates a temporal network represented as a 3D NumPy array of shape (t, n, n), where each n x n slice along the time axis is a symmetric adjacency matrix representing the network at a given time step. Edges between distinct node pairs are included independently with probability `pconn`. All diagonal entries (self-loops) are set to 1.
 
-    This function creates a temporal network represented as a 3D NumPy array of shape (t, n, n),
-    where each n x n slice along the time axis is a symmetric adjacency matrix representing the
-    network at a given time step. Edges between distinct node pairs are included independently
-    with probability `pconn`. All diagonal entries (self-loops) are set to 1.
-
-    Parameters:
+    Args:
         t (int): Duration of the temporal network (number of time steps).
         n (int): Number of nodes in the network.
-        pconn (float): Probability of connection between distinct nodes at each time step (0 ≤ pconn ≤ 1).
+        pconn (float): Probability of connection between distinct node pairs.
 
     Returns:
-        np.ndarray: A temporal network of shape (t, n, n), where each entry is 1 if a connection exists,
-                    and 0 otherwise. Each n x n slice is symmetric with diagonal entries set to 1.
+        np.ndarray: A temporal network of shape (t, n, n).
     """
-    # Generate upper triangular random connections (excluding diagonal)
     upper = np.triu(np.random.rand(t, n, n) < pconn, k=1)
-    
-    # Mirror the upper triangle to the lower triangle to make it symmetric
     tnet = upper + np.transpose(upper, axes=(0, 2, 1))
-    
-    # Convert to int (0 or 1)
     tnet = tnet.astype(int)
-    
-    # Add self-loops (diagonal = 1)
     idx = np.arange(n)
     tnet[:, idx, idx] = 1
 
@@ -754,27 +656,6 @@ def generateRandomTemporalNetwork(t, n, pconn):
 def PartiallyRandomizeMatrix(adj_matrix, rewire_prob, preserve_first_snapshot=False, seed=None):
     """
     Partially randomize a symmetric connectivity matrix while preserving self-loops.
-
-    A proportion `rewire_prob` of existing edges are rewired randomly among
-    non-existent edges. Self-loops (diagonal ones) are always preserved.
-
-    Parameters
-    ----------
-    adj_matrix : np.ndarray, shape (N, N)
-        Input binary adjacency matrix (symmetric).
-    rewire_prob : float
-        Proportion of existing edges to rewire (0 = no randomization,
-        1 = full randomization).
-    preserve_first_snapshot : bool, optional (default=False)
-        If True, no randomization is applied (returns `adj_matrix` unchanged).
-    seed : int or None, optional (default=None)
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    randomized_matrix : np.ndarray, shape (N, N)
-        Partially randomized symmetric adjacency matrix with self-loops
-        on the diagonal.
     """
     rng = np.random.default_rng(seed)
     n_nodes = len(adj_matrix)
@@ -817,27 +698,7 @@ def PartiallyRandomizeMatrix(adj_matrix, rewire_prob, preserve_first_snapshot=Fa
 def GenerateRandomizedTemporalNetwork(initial_matrix, n_snapshots, rewire_prob, seed=None):
     """
     Generate a randomized temporal network from a static connectivity matrix.
-
-    At each snapshot, the base adjacency matrix is partially randomized by
-    rewiring a fraction of its edges while preserving the diagonal. The first
-    snapshot can be preserved exactly.
-
-    Parameters
-    ----------
-    initial_matrix : np.ndarray, shape (N, N)
-        Base binary adjacency matrix (symmetric).
-    n_snapshots : int
-        Number of snapshots to generate.
-    rewire_prob : float
-        Randomization proportion at each snapshot (0 = no randomization,
-        1 = full randomization).
-    seed : int or None, optional (default=None)
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    tnet : np.ndarray, shape (n_snapshots, N, N)
-        Temporal network with partially randomized snapshots.
+    At each snapshot, the base adjacency matrix is partially randomized by rewiring a fraction of its edges while preserving the diagonal. The first snapshot can be preserved exactly.
     """
     rng = np.random.default_rng(seed)
     n_nodes = len(initial_matrix)
@@ -848,11 +709,7 @@ def GenerateRandomizedTemporalNetwork(initial_matrix, n_snapshots, rewire_prob, 
         tnet[t_idx] = PartiallyRandomizeMatrix(
             initial_matrix, rewire_prob,
             preserve_first_snapshot=preserve_first,
-            seed=rng.integers(1e9)  # independent seed per snapshot
+            seed=rng.integers(1e9)
         )
 
     return tnet
-
-
-
-    

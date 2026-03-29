@@ -2,21 +2,25 @@ import numpy as np
 import warnings
 
 
+def _summarize_scores(values, summary_stat="median"):
+    """Reduce a 1D score array to a median or mean."""
+    if summary_stat == "median":
+        return float(np.nanmedian(values))
+    if summary_stat == "mean":
+        return float(np.nanmean(values))
+    raise ValueError("summary_stat must be 'median' or 'mean'.")
+
+
 def SetDiagonals(tensor, value=1):
     """
     Set the diagonals of all matrices in a temporal or static adjacency tensor.
 
-    Parameters
-    ----------
-    tensor : np.ndarray, shape (T, N, N) or (N, N)
-        Input adjacency tensor or matrix. If 2D, it is treated as a single snapshot.
-    value : int or float, optional (default=1)
-        Value to assign along the diagonal.
+    Args:
+        tensor: np.ndarray, shape (T, N, N) or (N, N). Input adjacency tensor or matrix. If 2D, it is treated as a single snapshot.
+        value: int or float, optional (default=1). Value to assign along the diagonal.
 
-    Returns
-    -------
-    tensor_out : np.ndarray
-        The modified tensor with diagonals set to `value`.
+    Returns:
+        tensor_out: np.ndarray. The modified tensor with diagonals set to `value`.
     """
     arr = tensor.copy()
     if arr.ndim == 2:  # single snapshot case
@@ -29,33 +33,22 @@ def SetDiagonals(tensor, value=1):
         raise ValueError("Input must be 2D or 3D array.")
     return arr
 
-# =========================================================
-# Degree statistics
-# =========================================================
 
 def ComputeAverageDegree(adj_tensor, threshold=None):
     """
     Compute the average and standard deviation of degrees over a temporal network.
 
-    Parameters
-    ----------
-    adj_tensor : np.ndarray, shape (T, N, N)
-        Temporal adjacency (binary or weighted). Assumed symmetric per snapshot.
-    threshold : float or None, optional (default=None)
-        If provided, binarize as (A > threshold). If None, use the input as-is
-        (cast to int).
+    Args:
+        adj_tensor: np.ndarray, shape (T, N, N). Temporal adjacency (binary or weighted). Assumed symmetric per snapshot.
+        threshold: float or None, optional (default=None). If provided, binarize as (A > threshold). If None, use the input as-is (cast to int).
 
-    Returns
-    -------
-    mean_deg : float
-        Mean degree averaged over all nodes and time snapshots.
-    std_deg : float
-        Standard deviation of degrees over all nodes and time snapshots.
+    Returns:
+        mean_deg: float. Mean degree averaged over all nodes and time snapshots.
+        std_deg: float. Standard deviation of degrees over all nodes and time snapshots.
 
-    Notes
-    -----
-    - Diagonals are set to 0 before degree computation.
-    - Degree per snapshot is computed as row-sums of the binarized adjacency.
+    Notes:
+        - Diagonals are set to 0 before degree computation.
+        - Degree per snapshot is computed as row-sums of the binarized adjacency.
     """
     A = adj_tensor.copy()
     if threshold is None:
@@ -63,48 +56,28 @@ def ComputeAverageDegree(adj_tensor, threshold=None):
     else:
         binarized = (A > threshold).astype(int)
 
-    # zero out diagonals per snapshot
     T, n_nodes, _ = binarized.shape
     idx = np.arange(n_nodes)
     binarized[:, idx, idx] = 0
 
-    degrees = binarized.sum(axis=2)   # shape (T, N)
+    degrees = binarized.sum(axis=2)
     mean_deg = degrees.mean()
     std_deg = degrees.std()
     return mean_deg, std_deg
 
 
-
-
-
-
-
-# =========================================================
-# Smart walker / earliest-arrival temporal distance
-# =========================================================
-
 def SmartWalker(tnet):
     """
     Compute earliest-arrival temporal distances using a 'smart walker'.
-
     The algorithm aggregates temporal reachability cumulatively across time.
-    For each time t, it multiplies the current reachability matrix by snapshot t,
-    marking nodes reachable by time t+1 if a path exists using snapshots up to t.
 
-    Parameters
-    ----------
-    tnet : np.ndarray, shape (T, N, N)
-        Temporal adjacency (binary), assumed symmetric per snapshot.
-        Diagonals are forced to 1 internally (self-reachability).
+    Args:
+        tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), assumed symmetric per snapshot. Diagonals are forced to 1 internally (self-reachability).
 
-    Returns
-    -------
-    dmtx : np.ndarray, shape (N, N)
-        Earliest arrival time (in snapshot steps) from i to j.
-        np.nan on diagonal; np.inf if j is never reached from i.
+    Returns:
+        dmtx: np.ndarray, shape (N, N). Earliest arrival time (in snapshot steps) from i to j. np.nan on diagonal; np.inf if j is never reached from i.
     """
     tnet_copy = tnet.copy()
-    # force all diagonals to 1 (self-reachability at every time)
     np.einsum('tii->ti', tnet_copy)[:] = 1
 
     n = tnet_copy.shape[1]
@@ -123,45 +96,27 @@ def SmartWalker(tnet):
     return dmtx
 
 
-# =========================================================
-# Random walker (Monte Carlo first-passage times)
-# =========================================================
-
 def RandomWalker(tnet, n_trials, return_fpt_matrix=False, seed=None):
     """
-    Estimate temporal distances via Monte Carlo random walks (first passage times).
+    Estimate temporal distances via Monte Carlo random walks.
+    For each trial and source node, simulate a walk over snapshots and record
+    first-passage times.
 
-    For each trial and each source node, simulate a random walk over T snapshots:
-      - At time t, move uniformly at random to a neighbor in snapshot t.
-      - Record first time each node is visited (first passage), in steps [1..T].
-      - If a node is never visited, its FPT is set to np.inf for that source.
+    Args:
+        tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), assumed symmetric per snapshot. Diagonals are forced to 1 internally (self-reachability).
+        n_trials: int. Number of Monte Carlo trials.
+        return_fpt_matrix: bool, optional (default=False). If True, also return the per-trial FPT tensors.
+        seed: int or None, optional (default=None). Seed for reproducibility.
 
-    Parameters
-    ----------
-    tnet : np.ndarray, shape (T, N, N)
-        Temporal adjacency (binary), assumed symmetric per snapshot.
-        Diagonals are forced to 1 internally (self-reachability).
-    n_trials : int
-        Number of Monte Carlo trials.
-    return_fpt_matrix : bool, optional (default=False)
-        If True, also return the per-trial FPT tensors.
-    seed : int or None, optional (default=None)
-        Seed for reproducibility.
-
-    Returns
-    -------
-    dmtx : np.ndarray, shape (N, N)
-        Mean first passage time across trials, ignoring np.inf entries.
-        np.nan on diagonal; np.inf if a node is never reached across all trials.
-    mean_q6 : list[float]
-        Mean of the six summary statistics (see MeanDistance) across trials.
-    all_fpt : np.ndarray, optional, shape (n_trials, N, N)
-        Returned only if `return_fpt_matrix=True`.
+    Returns:
+        dmtx: np.ndarray, shape (N, N). Mean first passage time across trials, ignoring np.inf entries. np.nan on diagonal; np.inf if a node is never reached across all trials.
+        mean_q6: list[float]. Mean of the summary statistics across trials.
+        all_fpt: np.ndarray, optional, shape (n_trials, N, N). Returned only if `return_fpt_matrix=True`.
     """
     rng = np.random.default_rng(seed)
 
     tnet_copy = tnet.copy()
-    np.einsum('tii->ti', tnet_copy)[:] = 1  # force diagonal=1 at all times
+    np.einsum('tii->ti', tnet_copy)[:] = 1
 
     T, n_nodes, _ = tnet_copy.shape
     all_dmtx = np.zeros((n_trials, n_nodes, n_nodes))
@@ -182,7 +137,7 @@ def RandomWalker(tnet, n_trials, return_fpt_matrix=False, seed=None):
                 neighbors = np.where(adj[where] > 0)[0]
 
                 if len(neighbors) == 0:
-                    break  # stuck (should be rare with diag=1)
+                    break
 
                 next_node = rng.choice(neighbors)
 
@@ -197,19 +152,16 @@ def RandomWalker(tnet, n_trials, return_fpt_matrix=False, seed=None):
             dmtx_trial[source] = first_hit
 
         all_dmtx[trial] = dmtx_trial
-        q6_array[trial] = MeanLatencyMatrixAnalysis(dmtx_trial, T + 1)  # penalty = T+1
+        q6_array[trial] = MeanLatencyMatrixAnalysis(dmtx_trial, T + 1)
 
     mean_q6 = q6_array.mean(axis=0)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        # mean over trials, ignoring inf entries
         dmtx = np.mean(all_dmtx, axis=0, where=~np.isinf(all_dmtx))
-        # if a pair is inf in all trials, keep it as inf
         all_inf_mask = np.all(np.isinf(all_dmtx), axis=0)
         dmtx[all_inf_mask] = np.inf
 
-    # diag as nan for distance-style matrices
     np.fill_diagonal(dmtx, np.nan)
 
     if return_fpt_matrix:
@@ -218,205 +170,108 @@ def RandomWalker(tnet, n_trials, return_fpt_matrix=False, seed=None):
         return dmtx, mean_q6.tolist()
 
 
-# =========================================================
-# Distance summaries (mean distance, reachability, penalties)
-# =========================================================
-
 def MeanLatencyMatrixAnalysis(dmx, penalty):
     """
-    Summarize a distance/first-passage matrix with six quantities.
+    Summarize a distance/first-passage matrix with five quantities.
+    Given a matrix `dmx` where diagonal is NaN, finite off-diagonals are distances, and +inf denotes unreachable pairs, compute:
+    1) impermeability: Mean of distance normalized by source irrigation, averaged over sources. 2) latency: Mean of all finite distances. 3) resistance: Mean distance after replacing `+inf` with `penalty`. 4) inaccessibility: Count of `+inf` entries. 5) irrigation: Count of finite entries.
 
-    Given a matrix `dmx` where diagonal is NaN, finite off-diagonals are distances,
-    and +inf denotes unreachable pairs, compute:
+    Args:
+        dmx: np.ndarray, shape (N, N). Distance or first-passage matrix with NaN on the diagonal and possibly +inf.
+        penalty: float. Replacement value used to compute penalized mean distance.
 
-    1) irr   : Mean out-reachability per source (# of finite targets).
-    2) res   : Mean of (distance normalized by source reach), averaged over sources.
-    3) dist  : Mean of all finite distances (pooled).
-    4) pdist : Mean distance after replacing +inf with `penalty`.
-    5) ninf  : Count of +inf entries.
-    6) nfin  : Count of finite entries.
-
-    Parameters
-    ----------
-    dmx : np.ndarray, shape (N, N)
-        Distance or first-passage matrix with NaN on the diagonal and possibly +inf.
-    penalty : float
-        Replacement value used to compute penalized mean distance.
-
-    Returns
-    -------
-    stats : list[float]
-        [irr, res, dist, pdist, ninf, nfin]
+    Returns:
+        stats: list[float]. [impermeability, latency, resistance, inaccessibility, irrigation]
     """
     dmx = dmx.copy()
     np.fill_diagonal(dmx, np.nan)
 
     dmtx = np.where(np.isinf(dmx), np.nan, dmx)
-    dist = np.nanmean(dmtx)
+    latency = np.nanmean(dmtx)
 
     finite_mask = ~np.isnan(dmtx)
-    reach = finite_mask.sum(axis=1)  # per-source reachable count
-    irr = reach.mean()
+    irrigation_by_source = finite_mask.sum(axis=1)
 
-    # normalize each row by its reach (avoid div-by-zero via nan)
-    # with np.errstate(invalid='ignore', divide='ignore'):
+    # Normalize each row by source irrigation, ignoring empty rows.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        resmtx = dmtx / reach[:, None]
-    res = np.nanmean(resmtx)
+        impermeability_matrix = dmtx / irrigation_by_source[:, None]
+    impermeability = np.nanmean(impermeability_matrix)
 
     inf_mask = np.isinf(dmx)
-    ninf = inf_mask.sum()
-    nfin = np.isfinite(dmx).sum() - np.isnan(np.diag(dmx)).sum()  # exclude diag NaNs
+    inaccessibility = inf_mask.sum()
+    irrigation = np.isfinite(dmx).sum() - np.isnan(np.diag(dmx)).sum()
 
-    pmtx = dmx.copy()
-    pmtx[inf_mask] = penalty
-    pdist = np.nanmean(pmtx)
+    resistance_matrix = dmx.copy()
+    resistance_matrix[inf_mask] = penalty
+    resistance = np.nanmean(resistance_matrix)
 
-    return [float(irr), float(res), float(dist), float(pdist), float(ninf), float(nfin)]
+    return [
+        float(impermeability),
+        float(latency),
+        float(resistance),
+        float(inaccessibility),
+        float(irrigation),
+    ]
 
-
-# =========================================================
-# End-to-end bundle for temporal distance measures
-# =========================================================
 
 def ComputeSmartTemporalDistanceMeasures(tnet, random_seed=None):
     """
-    Compute a bundle of distance-related measures for a temporal network.
+    Compute the smart-walker distance summary for a temporal network.
 
-    This function reports:
-      - SmartWalker summaries (earliest-arrival distances)
+    Args:
+        tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), symmetric per snapshot.
+        random_seed: int or None, optional (default=None). Seed for reproducibility (used by RandomWalker).
 
-    Parameters
-    ----------
-    tnet : np.ndarray, shape (T, N, N)
-        Temporal adjacency (binary), symmetric per snapshot.
-    random_seed : int or None, optional (default=None)
-        Seed for reproducibility (used by RandomWalker).
-
-    Returns
-    -------
-    metrics : list
-        - irrigation
-        - impermeability
-        - latency
-        - penalized latency
-        - number of infinite pairs 
-        - number of finitie pairs ('irrigation')
+    Returns:
+        metrics: list. [smart_impermeability, smart_latency, smart_resistance, smart_inaccessibility, smart_irrigation]
     """
     T = tnet.shape[0]
     penalty = T + 1
 
-    # avg_deg, std_deg = ComputeAverageDegree(tnet.copy())
+    smart_latency_matrix = SmartWalker(tnet)
+    smart_metrics = MeanLatencyMatrixAnalysis(smart_latency_matrix, penalty)
+    return smart_metrics
 
-    sdmtx = SmartWalker(tnet)
-    smart_q6 = MeanLatencyMatrixAnalysis(sdmtx, penalty)
-
-    # rdmtx, drunk_q6_mn = RandomWalker(tnet, n_reps, seed=random_seed)
-    # drunk_q6 = MeanLatencyMatrixAnalysis(rdmtx, penalty)
-
-    # Return flattened list of all summaries
-    return smart_q6 
 
 def ComputeDrunkTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None):
     """
-    Compute a bundle of distance-related measures for a temporal network.
+    Compute the drunk-walker distance summary for a temporal network.
 
-    This function reports:
-      - RandomWalker summaries (Monte Carlo FPT), plus a combined mean-Q6 across trials
+    Args:
+        tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), symmetric per snapshot.
+        n_reps: int, optional (default=100). Number of random-walk trials for the Monte Carlo estimator.
+        random_seed: int or None, optional (default=None). Seed for reproducibility (used by RandomWalker).
 
-    Parameters
-    ----------
-    tnet : np.ndarray, shape (T, N, N)
-        Temporal adjacency (binary), symmetric per snapshot.
-    n_reps : int, optional (default=100)
-        Number of random-walk trials for the Monte Carlo estimator.
-    random_seed : int or None, optional (default=None)
-        Seed for reproducibility (used by RandomWalker).
-
-    Returns
-    -------
-    metrics : list
-        metrics : list
-            - irrigation
-            - impermeability
-            - latency
-            - penalized latency
-            - number of infinite pairs 
-            - number of finitie pairs ('irrigation')
+    Returns:
+        metrics: list. [drunk_impermeability, drunk_latency, drunk_resistance, drunk_inaccessibility, drunk_irrigation]
     """
-    # T = tnet.shape[0]
-    # penalty = T + 1
-
-    # avg_deg, std_deg = ComputeAverageDegree(tnet.copy())
-
-    # sdmtx = SmartWalker(tnet)
-    # smart_q6 = MeanLatencyMatrixAnalysis(sdmtx, penalty)
-
-    rdmtx, drunk_q6_mn = RandomWalker(tnet, n_reps, seed=random_seed)
-    # drunk_q6 = MeanLatencyMatrixAnalysis(rdmtx, penalty)
-
-    # Return flattened list of all summaries
-    return drunk_q6_mn
+    drunk_latency_matrix, drunk_metrics = RandomWalker(tnet, n_reps, seed=random_seed)
+    return drunk_metrics
 
 
-def ComputeCirculationLatencyAndRate(adjacency_matrices, max_latency=None, return_full=False):
+def ComputeCirculationLatencyAndRate(
+    adjacency_matrices,
+    max_latency=None,
+    return_full=False,
+    summary_stat="median",
+):
     """
     Compute circulation latency and rate in one pass for a temporal network.
+    For each start time τ and node i: • A start is *eligible* if deg_i(A_τ) > 1 (i.e., at least one neighbor besides self). • We allow waiting (self-loops) in every snapshot by forcing diag=1. • We detect the first time a walk that starts at i returns to i by tracking diagonal increases in cumulative products: P_τ,0 = A_τ; P_τ,ℓ = P_τ,ℓ-1 @ A_{τ+ℓ}. • When a new diagonal hit occurs for i at step ℓ, we record a latency of ℓ+1 (keeps your original convention), and count a hit for rate.
+    The function trims to *active* nodes (any off-diagonal activity across time) for efficiency, then pads results conceptually via index mapping (active_nodes).
 
-    For each start time τ and node i:
-      • A start is *eligible* if deg_i(A_τ) > 1 (i.e., at least one neighbor besides self).
-      • We allow waiting (self-loops) in every snapshot by forcing diag=1.
-      • We detect the first time a walk that starts at i returns to i by tracking
-        diagonal increases in cumulative products: P_τ,0 = A_τ; P_τ,ℓ = P_τ,ℓ-1 @ A_{τ+ℓ}.
-      • When a new diagonal hit occurs for i at step ℓ, we record a latency of ℓ+1
-        (keeps your original convention), and count a hit for rate.
+    Args:
+        adjacency_matrices: np.ndarray, shape (T, N, N). Temporal adjacency (binary or weighted). Treated as binary for products. Symmetry is assumed but not required.
+        max_latency: int or None, optional (default=None). Maximum steps searched for a return after τ. If None, uses T. Also capped by remaining horizon T-τ.
+        return_full: bool, optional (default=False). If True, return detailed per-node arrays in addition to global summaries.
+        summary_stat: `median` or `mean` for reducing nodewise latency.
 
-    The function trims to *active* nodes (any off-diagonal activity across time) for
-    efficiency, then pads results conceptually via index mapping (active_nodes).
+    Returns:
+        If `return_full` is False, a summary dict including median nodewise latency and rate statistics. If `return_full` is True, the same summaries plus nodewise detail arrays.
 
-    Parameters
-    ----------
-    adjacency_matrices : np.ndarray, shape (T, N, N)
-        Temporal adjacency (binary or weighted). Treated as binary for products.
-        Symmetry is assumed but not required.
-    max_latency : int or None, optional (default=None)
-        Maximum steps searched for a return after τ. If None, uses T. Also capped
-        by remaining horizon T-τ.
-    return_full : bool, optional (default=False)
-        If True, return detailed per-node arrays in addition to global summaries.
-
-    Returns
-    -------
-    If return_full is False:
-        global : dict
-            {
-              'latency_percentiles'       : np.ndarray (5,)  # [5,25,50,75,95] of per-node mean latencies
-              'latency_mean'              : float            # mean of per-node mean latencies
-              'latency_std'               : float            # std  of per-node mean latencies
-              'rate_nodewise_mean'        : float            # NaN-mean of per-node rates
-              'rate_overall'              : float            # total hits / total eligible
-              'mean_hits_per_node'        : float            # average hit count per node
-            }
-
-    If return_full is True:
-        result : dict
-            All the above plus:
-            {
-              'active_nodes'              : np.ndarray (M,),
-              'nodewise_mean_latency'     : np.ndarray (M,),  # NaN where no hits
-              'nodewise_min_latency'      : np.ndarray (M,),  # NaN where no hits
-              'nodewise_hits'             : np.ndarray (M,),
-              'nodewise_eligible'         : np.ndarray (M,),
-              'nodewise_rate'             : np.ndarray (M,),  # hits/eligible, NaN if eligible=0
-            }
-
-    Notes
-    -----
-    • Diagonals are forced to 1 across all snapshots (waiting allowed).
-    • Eligibility uses the start snapshot only (deg > 1).
-    • Complexity ~ O(T · M^3) in dense worst-case (M = active nodes), typically
-      less due to early exits once all eligible nodes have hit for a given τ.
+    Notes:
+        • Diagonals are forced to 1 across all snapshots (waiting allowed). • Eligibility uses the start snapshot only (deg > 1). • Complexity ~ O(T · M^3) in dense worst-case (M = active nodes), typically less due to early exits once all eligible nodes have hit for a given τ.
     """
     if adjacency_matrices.ndim != 3:
         raise ValueError("adjacency_matrices must be (T, N, N).")
@@ -500,7 +355,8 @@ def ComputeCirculationLatencyAndRate(adjacency_matrices, max_latency=None, retur
     # Global summaries
     latency_mean  = float(np.nanmean(nodewise_mean_latency))
     latency_std   = float(np.nanstd(nodewise_mean_latency))
-    latency_pct   = np.nanpercentile(nodewise_mean_latency, [5, 25, 50, 75, 95])
+    latency_median = float(np.nanmedian(nodewise_mean_latency))
+    latency_summary = _summarize_scores(nodewise_mean_latency, summary_stat=summary_stat)
 
     rate_nodewise_mean = float(np.nanmean(nodewise_rate))
     total_hits = int(count_hits.sum())
@@ -511,7 +367,9 @@ def ComputeCirculationLatencyAndRate(adjacency_matrices, max_latency=None, retur
 
     if not return_full:
         return {
-            'latency_percentiles': latency_pct,
+            'latency_median': latency_median,
+            'latency_summary': float(latency_summary),
+            'summary_stat': summary_stat,
             'latency_mean': latency_mean,
             'latency_std': latency_std,
             'rate_nodewise_mean': rate_nodewise_mean,
@@ -520,7 +378,9 @@ def ComputeCirculationLatencyAndRate(adjacency_matrices, max_latency=None, retur
         }
 
     return {
-        'latency_percentiles': latency_pct,
+        'latency_median': latency_median,
+        'latency_summary': float(latency_summary),
+        'summary_stat': summary_stat,
         'latency_mean': latency_mean,
         'latency_std': latency_std,
         'rate_nodewise_mean': rate_nodewise_mean,
@@ -535,35 +395,24 @@ def ComputeCirculationLatencyAndRate(adjacency_matrices, max_latency=None, retur
     }
 
 
-def ComputeCirculationLatency(adjacency_matrices, max_latency=None, return_full=False):
+def ComputeCirculationLatency(
+    adjacency_matrices,
+    max_latency=None,
+    return_full=False,
+    summary_stat="median",
+):
     """
-        Compute node-wise circulation latency in a temporal network (vectorized).
+    Compute node-wise circulation latency in a temporal network (vectorized).
 
-        Parameters
-        ----------
-        adjacency_matrices : array, shape (T, N, N)
-            Sequence of adjacency matrices (binary, 0/1), with waiting (diagonal ones).
-        max_latency : int, optional
-            Maximum number of steps to search. If None, set to T.
-        return_full : bool, optional (default: False)
-            If True, return the full dictionary (matrix + summaries).
-            If False, return only global_percentiles_latency to match your current behavior.
+    Args:
+        adjacency_matrices: array, shape (T, N, N). Sequence of adjacency matrices (binary, 0/1), with waiting (diagonal ones).
+        max_latency: int, optional. Maximum number of steps to search. If None, set to T.
+        return_full: bool, optional. If True, return nodewise details and summary scalars.
+        summary_stat: `median` or `mean` for reducing nodewise latency.
 
-        Returns
-        -------
-        If return_full=False (default):
-            global_percentiles_latency : ndarray of shape (5,)
-                (5,25,50,75,95) percentiles of nodewise mean latency.
-            mean count hits (number of circulations recorded)
-        If return_full=True:
-            dict with keys:
-                'circulation_matrix'        : (N_active, T) latency matrix (NaN if no circulation at that start time)
-                'nodewise_mean_latency'     : (N_active,) mean latency per node
-                'global_mean_latency'       : float
-                'global_std_latency'        : float
-                'global_percentiles_latency': array of (5,25,50,75,95)
-                'active_nodes'              : indices of the kept nodes
-        """
+    Returns:
+        If `return_full` is False, `(summary_latency, mean_count_hits)`. If `return_full` is True, a dict with nodewise arrays plus global mean, std, median, and requested summary latency.
+    """
 
     T, N, _ = adjacency_matrices.shape
     if max_latency is None:
@@ -606,7 +455,7 @@ def ComputeCirculationLatency(adjacency_matrices, max_latency=None, return_full=
 
             hit = (new_diag > prev_diag) & (~recorded) & deg_mask
             if np.any(hit):
-                lat_val = latency + 1  # keep your convention
+                lat_val = latency + 1  
                 # Update accumulators
                 sum_latency[hit] += lat_val
                 count_hits[hit]  += 1
@@ -629,7 +478,10 @@ def ComputeCirculationLatency(adjacency_matrices, max_latency=None, return_full=
     # Global summaries from the per-node *mean* latencies (matches previous behavior)
     global_mean_latency = np.nanmean(nodewise_mean_latency)
     global_std_latency  = np.nanstd(nodewise_mean_latency)
-    global_percentiles_latency = np.nanpercentile(nodewise_mean_latency, [5, 25, 50, 75, 95])
+    global_median_latency = np.nanmedian(nodewise_mean_latency)
+    global_summary_latency = _summarize_scores(
+        nodewise_mean_latency, summary_stat=summary_stat
+    )
 
     if return_full:
         # Replace inf (no hits) with NaN for readability
@@ -641,11 +493,13 @@ def ComputeCirculationLatency(adjacency_matrices, max_latency=None, return_full=
             'hit_count': count_hits,
             'global_mean_latency': float(global_mean_latency),
             'global_std_latency': float(global_std_latency),
-            'global_percentiles_latency': global_percentiles_latency,
+            'global_median_latency': float(global_median_latency),
+            'global_summary_latency': float(global_summary_latency),
+            'summary_stat': summary_stat,
             'active_nodes': active_nodes
         }
     else:
-        return global_percentiles_latency.tolist(), np.mean(count_hits)
+        return float(global_summary_latency), float(np.mean(count_hits))
 
 
 
@@ -654,21 +508,18 @@ def ComputeCirculationLatency(adjacency_matrices, max_latency=None, return_full=
 
 def LatencyMatrixAnalysis(dmtx, penalty): #summarize_temporal_distance_matrix(dmtx):
     """
-    Summarize a temporal distance matrix into average values 
+    Summarize a temporal distance matrix into average values
 
-    Parameters
-    ----------
-    dmtx : array, shape (N, N)
-        Matrix of minimal distances between nodes (inf for unreachable pairs).
+    Args:
+        dmtx: array, shape (N, N). Matrix of minimal distances between nodes (inf for unreachable pairs).
 
-    Returns
-    -------
-    - irrigation, 
-    - resistance, 
-    - distance,
-    - penalized distance (for inf pairs) with penalty,
-    - number of infinite distance pairs,
-    - number of finite distance pairs
+    Returns:
+        - irrigation,
+        - resistance,
+        - distance,
+        - penalized distance (for inf pairs) with penalty,
+        - number of infinite distance pairs,
+        - number of finite distance pairs
     """
     
     np.fill_diagonal(dmx, np.nan) # diag to nan
@@ -691,5 +542,3 @@ def LatencyMatrixAnalysis(dmtx, penalty): #summarize_temporal_distance_matrix(dm
 
     return [irr, res, dist, pdist, ninf, nfin]
     
-
-
