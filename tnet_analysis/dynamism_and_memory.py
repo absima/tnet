@@ -4,13 +4,19 @@ from scipy.stats import norm
 from sklearn.metrics import normalized_mutual_info_score
 
 
-def _summarize_scores(values, summary_stat="median"):
-    """Reduce a 1D score array to a median or mean."""
+def _summarize_scores(values, summary_stat=None):
+    """Summarize node scores with percentiles or a requested statistic."""
+    if summary_stat is None or summary_stat == "percentiles":
+        return np.nanpercentile(values, [5, 25, 50, 75, 95]).tolist()
+    if summary_stat == "both":
+        return [float(np.nanmean(values)), float(np.nanmedian(values))]
     if summary_stat == "median":
         return float(np.nanmedian(values))
     if summary_stat == "mean":
         return float(np.nanmean(values))
-    raise ValueError("summary_stat must be 'median' or 'mean'.")
+    raise ValueError(
+        "summary_stat must be None, 'percentiles', 'mean', 'median', or 'both'."
+    )
 
 
 def ComputeTemporalMutualInformation(adjacency_matrices):
@@ -53,7 +59,7 @@ def ComputeTemporalMutualInformation(adjacency_matrices):
 def ComputeDynamism(tnet):
     """
     Summarize global temporal “dynamism” using entropy, transitions, and similarity.
-    Given a binary temporal network `tnet` (T, N, N), this computes: 1) transition_probability, 2) global_entropy, 3) cosine_similarity, 4) net_fluidity, 5) mutual_information, 6) mean_edge_count, and 7) jaccard_overlap.
+    Given a binary temporal network `tnet` (T, N, N), this computes: 1) transition_probability, 2) global_entropy, 3) cosine_similarity, 4) net_fluidity, 5) mutual_information, and 6) mean_edge_count.
 
     Notes:
         - Uses lower-triangular edges (i<j) for all edgewise computations.
@@ -72,7 +78,6 @@ def ComputeDynamism(tnet):
         net_fluidity: float. Combined dynamism index `global_entropy * (1 - cosine_similarity)`.
         mutual_information: float. Average normalized mutual information across consecutive snapshots.
         mean_edge_count: float. Average undirected edge count per snapshot.
-        jaccard_overlap: float. Mean Jaccard overlap across consecutive snapshots.
 
     Notes:
         Requires `ComputeTemporalMutualInformation(tnet)` to be available in scope.
@@ -137,8 +142,6 @@ def ComputeDynamism(tnet):
         * (1.0 - (cosine_similarity if np.isfinite(cosine_similarity) else 0.0))
     )
     mutual_information = ComputeTemporalMutualInformation(tnet)
-    jaccard_overlap = ComputeTemporalEdgeOverlap(tnet)
-
     return [
         float(transition_probability),
         float(global_entropy),
@@ -146,7 +149,6 @@ def ComputeDynamism(tnet):
         float(net_fluidity),
         float(mutual_information),
         float(mean_edge_count),
-        float(jaccard_overlap),
     ]
 
 
@@ -209,7 +211,7 @@ def ComputeEdgePersistenceRate(adjacency_matrices):
     return np.mean(vals) if len(vals) else np.nan
 
 
-def ComputeNeighborhoodMemory(adjacency_matrices, lag=1, summary_stat="median"):
+def ComputeNeighborhoodMemory(adjacency_matrices, lag=1, summary_stat=None):
     """
     Compute neighborhood memory for each node via Jaccard similarity of neighbor sets.
     For each node i and snapshot t, compare its neighbors at t with its neighbors at t+lag. High memory indicates that a node tends to retain the same partners across time separated by the lag.
@@ -217,10 +219,10 @@ def ComputeNeighborhoodMemory(adjacency_matrices, lag=1, summary_stat="median"):
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
         lag: int, optional (default=1). Temporal lag between snapshots to compare (1 = consecutive snapshots).
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node neighborhood-memory scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
 
     Notes:
         - Node i’s score is the mean Jaccard similarity across all valid (t, t+lag) pairs.
@@ -247,17 +249,17 @@ def ComputeNeighborhoodMemory(adjacency_matrices, lag=1, summary_stat="median"):
     return _summarize_scores(memory_scores, summary_stat=summary_stat)
 
 
-def ComputeReturnability(adjacency_matrices, summary_stat="median"):
+def ComputeReturnability(adjacency_matrices, summary_stat=None):
     """
     Compute node-wise returnability in a temporal network.
     For each node i and time t, define: - neighbors_t = current neighbors of i (excluding self). - past_neighbors = union of all neighbors of i seen before t. The instantaneous returnability at time t is: |neighbors_t ∩ past_neighbors| / |neighbors_t|, when neighbors_t ≠ ∅. The node’s score is the mean of these values across time.
 
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node returnability scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
     """
     T, N, _ = adjacency_matrices.shape
     returnability_scores = np.full(N, np.nan)

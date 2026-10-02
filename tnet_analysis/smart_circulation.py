@@ -1,20 +1,28 @@
 import numpy as np
 
 
-def _summarize_scores(values, summary_stat="median"):
-    """Reduce a 1D score array to a median or mean."""
+def _summarize_scores(values, summary_stat=None):
+    """Summarize node scores with percentiles or a requested statistic."""
+    if summary_stat is None or summary_stat == "percentiles":
+        return np.nanpercentile(values, [5, 25, 50, 75, 95]).tolist()
+    if summary_stat == "both":
+        return [float(np.nanmean(values)), float(np.nanmedian(values))]
     if summary_stat == "median":
         return float(np.nanmedian(values))
     if summary_stat == "mean":
         return float(np.nanmean(values))
-    raise ValueError("summary_stat must be 'median' or 'mean'.")
+    raise ValueError(
+        "summary_stat must be None, 'percentiles', 'mean', 'median', or 'both'."
+    )
 
 
 def ComputeCirculationLatency(
     adjacency_matrices,
     max_latency=None,
     return_full=False,
-    summary_stat="median",
+    summary_stat=None,
+    hops_per_frame=1,
+    latency_unit="frames",
 ):
     """
     Compute node-wise circulation latency in a temporal network (vectorized).
@@ -23,11 +31,20 @@ def ComputeCirculationLatency(
         adjacency_matrices: array, shape (T, N, N). Sequence of adjacency matrices (binary, 0/1), with waiting (diagonal ones).
         max_latency: int, optional. Maximum number of steps to search. If None, set to T.
         return_full: bool, optional. If True, return nodewise details and summary scalars.
-        summary_stat: `median` or `mean` for reducing nodewise latency.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
         If `return_full` is False, `(summary_latency, mean_count_hits)`. If `return_full` is True, a dict with nodewise arrays plus global mean, std, median, and requested summary latency.
     """
+
+    from .latency_measures import ComputeCirculationLatency as ComputeMultiHopCirculationLatency
+
+    if hops_per_frame > 1 or latency_unit != "frames":
+        return ComputeMultiHopCirculationLatency(
+            adjacency_matrices, max_latency=max_latency, return_full=return_full,
+            summary_stat=summary_stat, hops_per_frame=hops_per_frame,
+            latency_unit=latency_unit,
+        )
 
     T, N, _ = adjacency_matrices.shape
     if max_latency is None:
@@ -100,9 +117,9 @@ def ComputeCirculationLatency(
             'global_mean_latency': float(global_mean_latency),
             'global_std_latency': float(global_std_latency),
             'global_median_latency': float(global_median_latency),
-            'global_summary_latency': float(global_summary_latency),
+            'global_summary_latency': global_summary_latency,
             'summary_stat': summary_stat,
             'active_nodes': active_nodes
         }
     else:
-        return float(global_summary_latency), float(np.mean(count_hits))
+        return global_summary_latency, float(np.mean(count_hits))

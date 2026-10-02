@@ -4,26 +4,32 @@ from scipy.stats import norm
 from scipy import sparse
 
 
-def _summarize_scores(values, summary_stat="median"):
-    """Reduce a 1D score array to a median or mean."""
+def _summarize_scores(values, summary_stat=None):
+    """Summarize node scores with percentiles or a requested statistic."""
+    if summary_stat is None or summary_stat == "percentiles":
+        return np.nanpercentile(values, [5, 25, 50, 75, 95]).tolist()
+    if summary_stat == "both":
+        return [float(np.nanmean(values)), float(np.nanmedian(values))]
     if summary_stat == "median":
         return float(np.nanmedian(values))
     if summary_stat == "mean":
         return float(np.nanmean(values))
-    raise ValueError("summary_stat must be 'median' or 'mean'.")
+    raise ValueError(
+        "summary_stat must be None, 'percentiles', 'mean', 'median', or 'both'."
+    )
 
 
-def ComputeStaticClustering(adjacency_matrices, summary_stat="median"):
+def ComputeStaticClustering(adjacency_matrices, summary_stat=None):
     """
     Compute average static clustering coefficient per node across time.
     For each snapshot, the clustering coefficient of node i is defined as the fraction of realized links among i's neighbors out of the maximum possible. Final score per node is the time-average across snapshots.
 
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node static-clustering scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
 
     Notes:
         - Nodes with degree < 2 get clustering = 0 for that snapshot.
@@ -52,7 +58,7 @@ def ComputeStaticClustering(adjacency_matrices, summary_stat="median"):
     return _summarize_scores(clustering_scores, summary_stat=summary_stat)
 
 
-def ComputeTemporalClustering(adjacency_matrices, delta=1, summary_stat="median"):
+def ComputeTemporalClustering(adjacency_matrices, delta=1, summary_stat=None):
     """
     Compute temporal clustering coefficient for each node based on time-respecting triangles.
     A temporal triangle for node i is formed if: - i–j is active at time t1, - i–k is active at time t2 with t1 < t2 ≤ t1+delta, - and j–k is connected at some time t3 with t1 < t3 ≤ t2.
@@ -60,10 +66,10 @@ def ComputeTemporalClustering(adjacency_matrices, delta=1, summary_stat="median"
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
         delta: int, optional (default=1). Maximum temporal gap (in snapshots) allowed between edges to form a temporal triangle.
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node temporal-clustering scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
 
     Notes:
         - Nodes with no valid triplets get clustering = 0.
@@ -199,17 +205,17 @@ def ComputeTemporalParticipationCoefficient(adjacency_matrices, labels_per_snaps
     return float(np.nanmean(P_all)), P_all
 
 
-def ComputePartnerStability(adjacency_matrices, summary_stat="median"):
+def ComputePartnerStability(adjacency_matrices, summary_stat=None):
     """
     Compute partner stability for each node, based on recurrence of connections over time.
     Stability is higher when neighbor interactions recur more frequently, i.e., when the mean temporal gap between repeated connections is smaller.
 
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node partner-stability scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
 
     Notes:
         - Node i’s score is computed as 1 - mean_gap/T, where mean_gap is the average
@@ -236,7 +242,7 @@ def ComputePartnerStability(adjacency_matrices, summary_stat="median"):
     return _summarize_scores(stability_scores, summary_stat=summary_stat)
 
 
-def ComputePartnerDiversity(adjacency_matrices, window_size=20, summary_stat="median"):
+def ComputePartnerDiversity(adjacency_matrices, window_size=20, summary_stat=None):
     """
     Compute partner diversity for each node using normalized entropy across temporal windows.
     Diversity is higher when a node’s connections are distributed across many partners and many time windows, rather than concentrated in a few.
@@ -244,10 +250,10 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=20, summary_stat="me
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
         window_size: int, optional (default=20). Temporal window size for grouping interactions.
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node partner-diversity scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
 
     Notes:
         - For each neighbor j of node i, we collect the set of windows where i–j
@@ -299,7 +305,7 @@ def ComputePartnerDiversity(adjacency_matrices, window_size=20, summary_stat="me
     return _summarize_scores(diversity_scores, summary_stat=summary_stat)
 
 
-def ComputeNodePersistence(tnet, confidence=0.95, summary_stat="median"):
+def ComputeNodePersistence(tnet, confidence=0.95, summary_stat=None):
     """
     Compute node-level persistence scores and identify significantly persistent nodes.
     For each node i, persistence is defined as the mean probability that i is connected to its ever-connected neighbors across time. A node is deemed 'significantly persistent' if its persistence score exceeds a theoretical chance threshold derived from link density and sampling variance.
@@ -307,10 +313,10 @@ def ComputeNodePersistence(tnet, confidence=0.95, summary_stat="median"):
     Args:
         tnet: np.ndarray, shape (T, N, N). Temporal adjacency matrices (binary or weighted). Symmetric assumed.
         confidence: float, optional (default=0.95). Confidence level (e.g., 0.95, 0.99) used to set the theoretical threshold for persistence.
-        summary_stat: `median` or `mean` for reducing nodewise scores.
+        summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
 
     Returns:
-        summary_score: float. Requested summary of node persistence scores.
+        summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
         n_persistent_nodes: int. Number of nodes exceeding the theoretical persistence threshold.
 
     Notes:

@@ -1,5 +1,4 @@
 import numpy as np
-import scipy.io
 
 from tnet_analysis.dfc_to_tnet import BinarizeDFC
 from tnet_analysis.network_generators import GenerateNullModel
@@ -7,165 +6,243 @@ from tnet_analysis.latency_measures import (
     ComputeSmartTemporalDistanceMeasures,
     ComputeDrunkTemporalDistanceMeasures,
     ComputeCirculationLatency,
-    ComputeAverageDegree,
 )
 from tnet_analysis.dynamism_and_memory import (
     ComputeDynamism,
-    ComputeNeighborhoodMemory,
     ComputeReturnability,
 )
 from tnet_analysis.segregation_and_cohesion import (
-    ComputeNodePersistence,
-    ComputePartnerStability,
-    ComputePartnerDiversity,
     ComputeStaticClustering,
     ComputeTemporalClustering,
 )
 
 
-def func0(x):
-    return ComputeSmartTemporalDistanceMeasures(x)
+def func0(x, hops_per_frame=1, latency_unit="frames"):
+    return ComputeSmartTemporalDistanceMeasures(
+        x, summary_stat="both", hops_per_frame=hops_per_frame,
+        latency_unit=latency_unit,
+    )
 
-def func1(x):
-    return ComputeDrunkTemporalDistanceMeasures(x, n_reps=nreps)
+
+def func1(x, n_reps=None, random_seed=None, hops_per_frame=1,
+          latency_unit="frames"):
+    if n_reps is None:
+        n_reps = nreps
+    return ComputeDrunkTemporalDistanceMeasures(
+        x,
+        n_reps=n_reps,
+        random_seed=random_seed,
+        summary_stat="both",
+        hops_per_frame=hops_per_frame,
+        latency_unit=latency_unit,
+    )
+
 
 def func2(x):
     return ComputeDynamism(x)
 
+
 def func3(x):
-    summary_persistence, n_significant = ComputeNodePersistence(
-        x, 0.95, summary_stat=summary_stat
-    )
-    return [summary_persistence, n_significant]
+    return ComputeStaticClustering(x, summary_stat="both")
+
 
 def func4(x):
-    return [ComputePartnerStability(x, summary_stat=summary_stat)]
+    return ComputeTemporalClustering(x, summary_stat="both")
 
-def func5(x):
-    return [ComputePartnerDiversity(x, summary_stat=summary_stat)]
 
-def func6(x, window):
-    return [ComputeNeighborhoodMemory(x, lag=1, summary_stat=summary_stat)]
-
-def func7(x, window):
-    return [ComputeNeighborhoodMemory(x, lag=max(1, window // 2), summary_stat=summary_stat)]
-
-def func8(x, window):
-    return [ComputeNeighborhoodMemory(x, lag=max(1, window), summary_stat=summary_stat)]
-
-def func9(x):
-    return [ComputeStaticClustering(x, summary_stat=summary_stat)]
-
-def func10(x):
-    return [ComputeTemporalClustering(x, summary_stat=summary_stat)]
-
-def func11(x):
+def func5(x, hops_per_frame=1, latency_unit="frames"):
     summary_circulation, mean_count = ComputeCirculationLatency(
-        x, summary_stat=summary_stat
+        x, summary_stat="both", hops_per_frame=hops_per_frame,
+        latency_unit=latency_unit,
     )
-    return [summary_circulation, mean_count]
-
-def func12(x):
-    return [ComputeReturnability(x, summary_stat=summary_stat)]
+    return summary_circulation + [mean_count]
 
 
+def func6(x):
+    return ComputeReturnability(x, summary_stat="both")
+
+
+def EvaluateMetric(ifunc, tnet, tnet_nodiag, random_seed=None, n_reps=None,
+                   hops_per_frame=1, latency_unit="frames"):
+    """Evaluate and validate one metric specification."""
+    name, output_names, func, use_nodiag, use_window = METRIC_SPECS[ifunc]
+    x = tnet_nodiag if use_nodiag else tnet
+
+    if ifunc == 1:
+        values = func(x, n_reps=n_reps, random_seed=random_seed,
+                      hops_per_frame=hops_per_frame, latency_unit=latency_unit)
+    elif ifunc in (0, 5):
+        values = func(x, hops_per_frame=hops_per_frame,
+                      latency_unit=latency_unit)
+    elif use_window:
+        values = func(x, window)
+    else:
+        values = func(x)
+
+    values = np.asarray(values, dtype=float).reshape(-1)
+    expected_width = len(output_names)
+    if values.size != expected_width:
+        raise ValueError(
+            f"{func.__name__} returned {values.size} values, "
+            f"expected {expected_width}."
+        )
+    return ifunc, name, values
 
 
 
-def _pack_metrics(tnet, tnet_nodiag, window):
-    """Pack all metric outputs into one flat vector."""
-    out = np.full(nOut, np.nan, dtype=float)
-    offset = 0
-
-    for _, width, func, use_nodiag, use_window in METRIC_SPECS:
-        x = tnet_nodiag if use_nodiag else tnet
-        values = func(x, window) if use_window else func(x)
-        values = np.asarray(values, dtype=float)
-        if values.size != width:
-            raise ValueError(
-                f"{func.__name__} returned {values.size} values, expected {width}."
-            )
-        out[offset:offset + width] = values
-        offset += width
-
+def PadMetricValues(ifunc, values, fill_value=0.0):
+    """Pad one meaningful metric vector to the fixed parallel-task width."""
+    values = np.asarray(values, dtype=float).reshape(-1)
+    expected_width = len(METRIC_SPECS[ifunc][1])
+    if values.size != expected_width:
+        func = METRIC_SPECS[ifunc][2]
+        raise ValueError(
+            f"{func.__name__} returned {values.size} values, "
+            f"expected {expected_width}."
+        )
+    out = np.full(TASK_OUTPUT_WIDTH, fill_value, dtype=float)
+    out[:expected_width] = values
     return out
 
 
-def eval_subject_deg_tag(isubj, ideg, itag):
+def qIntSeg(tsdata, isubj, ideg, itag, ifunc, hops_per_frame=1,
+            latency_unit="frames"):
+    """Compute one validated metric for a subject, degree, and tag."""
     tseries = tsdata[isubj]
     tdeg = degList[ideg]
     tag = tags[itag]
 
-    otnet = BinarizeDFC(tseries, tdeg, window, lag)
-    T, N, _ = otnet.shape
-    numedges = np.sum(otnet) - T * N
+    otnet = BinarizeDFC(tseries, tdeg, window, lag, tag)
+    n_frames, n_nodes, _ = otnet.shape
+    n_off_diagonal_edges = np.sum(otnet) - n_frames * n_nodes
+    width = len(METRIC_SPECS[ifunc][1])
+    if n_off_diagonal_edges == 0:
+        name = METRIC_SPECS[ifunc][0]
+        values = np.zeros(TASK_OUTPUT_WIDTH, dtype=float)
+        values[:width] = np.nan
+        return ideg, itag, ifunc, name, values
 
-    out_block = np.full((nProb, nOut), np.nan, dtype=float)
-    if numedges == 0:
-        return ideg, itag, out_block
+    random_seed = rand_seed + 100000 * isubj + 1000 * ideg + 100 * itag
+    ntnet, _ = GenerateNullModel(otnet, tag, seed=random_seed)
+    ntnet_nodiag = np.array(ntnet, copy=True)
+    diagonal = np.arange(ntnet.shape[1])
+    ntnet_nodiag[:, diagonal, diagonal] = 0
 
-    for iprob, prob in enumerate(probs):
-        seedi = rand_seed + 100000 * isubj + 1000 * ideg + 100 * itag + iprob
-        ntnet, _ = GenerateNullModel(otnet, tag=tag, p_rewire=prob, seed=seedi)
-
-        ntnet_nodiag = np.array(ntnet, copy=True)
-        diag = np.arange(N)
-        ntnet_nodiag[:, diag, diag] = 0
-
-        out_block[iprob] = _pack_metrics(ntnet, ntnet_nodiag, window)
-
-    return ideg, itag, out_block
+    _, name, values = EvaluateMetric(
+        ifunc,
+        ntnet,
+        ntnet_nodiag,
+        random_seed=random_seed,
+        hops_per_frame=hops_per_frame,
+        latency_unit=latency_unit,
+    )
+    return ideg, itag, ifunc, name, PadMetricValues(ifunc, values)
 
 
+outdir = "data/output_multihop"
+indir = "/Users/sima/Documents/MATLAB/empirical"
 
-outdir = "data/output"
-indir = "data/input"
-indir = '/Users/sima/Documents/MATLAB/empirical'
+degList = np.logspace(np.log10(0.1), np.log10(83.04), num=54)[:10]
 
-tsdata = scipy.io.loadmat(f"{indir}/ts_100subjs.mat")["tseries"][:,:200,:]
+tags = [
+    "original",
+    # "emp_static"
+]
+hopList = [2, 5, 10]
+nHops = len(hopList)
+latency_unit = "frames"
 
-degList = np.logspace(np.log10(0.1), np.log10(83.04), num=54)
-tags = ["original"]
-probs = [0.05]
-
-rand_seed = 85869
 window = 20
 lag = 1
 nreps = 100
-summary_stat = "median"
+rand_seed = 85869
 
-# Metric schema:
-# (name, width, func, use_nodiag, use_window)
-# `use_nodiag=True` means run on the diagonal-zeroed temporal network.
-# `use_window=True` means call the metric as func(x, window) instead of func(x).
+def PairNames(prefix):
+    return (f"{prefix}_mean", f"{prefix}_median")
+
+
+# (name, output_names, function, use_nodiag, use_window)
 METRIC_SPECS = [
-    ("smart", 5, func0, False, False),
-    ("drunk", 5, func1, False, False),
-    ("dynamism", 7, func2, True, False),
-    ("persistence", 2, func3, True, False),
-    ("partner_stability", 1, func4, True, False),
-    ("partner_diversity", 1, func5, True, False),
-    ("memory_lag1", 1, func6, True, True),
-    ("memory_half_window", 1, func7, True, True),
-    ("memory_window", 1, func8, True, True),
-    ("static_clustering", 1, func9, True, False),
-    ("temporal_clustering", 1, func10, True, False),
-    ("circulation", 2, func11, False, False),
-    ("returnability", 1, func12, False, False),
+    (
+        "smart",
+        PairNames("smart_impermeability")
+        + PairNames("smart_latency")
+        + PairNames("smart_resistance")
+        + ("smart_inaccessibility", "smart_irrigation"),
+        func0,
+        False,
+        False,
+    ),
+    (
+        "drunk",
+        PairNames("drunk_impermeability")
+        + PairNames("drunk_latency")
+        + PairNames("drunk_resistance")
+        + ("drunk_inaccessibility", "drunk_irrigation"),
+        func1,
+        False,
+        False,
+    ),
+    (
+        "dynamism",
+        (
+            "transition_probability",
+            "global_entropy",
+            "cosine_similarity",
+            "net_fluidity",
+            "mutual_information",
+            "mean_edge_count",
+        ),
+        func2,
+        True,
+        False,
+    ),
+    (
+        "static_clustering",
+        PairNames("static_clustering"),
+        func3,
+        True,
+        False,
+    ),
+    (
+        "temporal_clustering",
+        PairNames("temporal_clustering"),
+        func4,
+        True,
+        False,
+    ),
+    (
+        "circulation",
+        PairNames("circulation_latency")
+        + ("circulation_mean_count",),
+        func5,
+        False,
+        False,
+    ),
+    (
+        "returnability",
+        PairNames("returnability"),
+        func6,
+        False,
+        False,
+    ),
 ]
+HOP_DEPENDENT_METRICS = {0, 1, 5}
 
 funcs = [spec[2] for spec in METRIC_SPECS]
-nMetric = len(METRIC_SPECS)
-nOut = sum(spec[1] for spec in METRIC_SPECS)
-
-metric_slices = {}
-offset = 0
-for name, width, _, _, _ in METRIC_SPECS:
-    metric_slices[name] = slice(offset, offset + width)
-    offset += width
+funcnames = [spec[0] for spec in METRIC_SPECS]
+nFunc = len(METRIC_SPECS)
+TASK_OUTPUT_WIDTH = 8
+nOut = TASK_OUTPUT_WIDTH
+metricNames = [
+    list(output_names)
+    + [
+        f"{name}_padding_{slot:02d}"
+        for slot in range(len(output_names), TASK_OUTPUT_WIDTH)
+    ]
+    for name, output_names, _, _, _ in METRIC_SPECS
+]
 
 nSubj = 100
 nDeg = len(degList)
 nTag = len(tags)
-nFunc = len(funcs)
-nProb = len(probs)
