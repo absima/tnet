@@ -200,6 +200,9 @@ from padding.
 
 ## User guide
 
+Read the [online user guide](https://temporal-network-analysis-toolkit.readthedocs.io/en/latest/)
+on Read the Docs, or download the [PDF for offline reading](output/pdf/tnet_analysis-1.0.2-user-guide.pdf).
+
 The practical Sphinx guide is in [docs/index.rst](docs/index.rst). It covers
 inputs, workflows, measures, parameters, result layouts and parallel computation,
 with downloadable examples and an API reference.
@@ -232,8 +235,8 @@ After pushing:
    default branch. The first build should start automatically; check its
    status under **Builds**.
 3. Open **View docs** after the build succeeds. Check the guide and its PDF
-   download, then add the assigned public URL to this README and to the
-   package's documentation metadata. No public URL is assumed in advance.
+   download. The hosted guide is linked above and in the package's
+   documentation metadata.
 4. For a versioned release, push a Git tag such as `v1.0.2` that includes this
    configuration. Activate/build it under **Versions** and select the desired
    default version. Keep `latest` for the development branch and use a release

@@ -16,6 +16,9 @@ setup(
     description="Temporal-network generation, integration, dynamism and structure measures",
     long_description=(PACKAGE_ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
+    project_urls={
+        "Documentation": "https://temporal-network-analysis-toolkit.readthedocs.io/en/latest/",
+    },
     license_expression="MIT",
     license_files=["LICENSE"],
     python_requires=">=3.9",
