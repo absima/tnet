@@ -13,6 +13,7 @@ requirements = [
 setup(
     name="tnet_analysis",
     version="1.0.2",
+    author="Simachew Mengiste (with Demian Battaglia)",
     description="Temporal-network generation, integration, dynamism and structure measures",
     long_description=(PACKAGE_ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",

@@ -13,6 +13,7 @@ release = next(ast.literal_eval(item.value) for item in setup_call.keywords
                if item.arg == "version")
 version = release
 project = "Temporal Network Analysis Toolkit"
+author = "Simachew Mengiste (with Demian Battaglia)"
 copyright = "2026, tnet_analysis contributors"
 extensions = ["sphinx.ext.autodoc", "sphinx.ext.napoleon",
               "sphinx.ext.doctest", "sphinx.ext.mathjax"]
@@ -31,7 +32,7 @@ napoleon_use_param = False
 napoleon_use_rtype = False
 latex_documents = [("index", "tnet_user_guide.tex",
                     f"Temporal Network Analysis Toolkit {release}: User Guide",
-                    "Toolkit contributors", "manual")]
+                    author, "manual")]
 latex_engine = "xelatex"
 latex_show_pagerefs = True
 latex_domain_indices = False

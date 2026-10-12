@@ -278,3 +278,7 @@ not upload or publish either artifact.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Credits
+
+Simachew Mengiste (with Demian Battaglia).

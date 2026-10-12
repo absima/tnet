@@ -11,6 +11,8 @@ All examples use generated data and need no external dataset.
 
 .. only:: html
 
+   **Simachew Mengiste (with Demian Battaglia)**
+
    Offline reading: :download:`Download the PDF user guide <../output/pdf/tnet_analysis-1.0.2-user-guide.pdf>`.
 
 .. toctree::
