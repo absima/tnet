@@ -542,7 +542,7 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None, **kwargs):
     Args:
         tnet: Input temporal network of shape `(T, N, N)`.
         tag: Null-model identifier.
-        scale: Unused legacy argument kept for compatibility.
+        scale: Reserved argument; does not affect generation.
         seed: Optional RNG seed.
         **kwargs: Extra options forwarded to template-based generators.
 
@@ -556,7 +556,12 @@ def GenerateNullModel(tnet, tag, scale=1, seed=None, **kwargs):
     tnet_core, n_core_nodes = TrimIsolatedNodes(tnet)
 
     # Tag groups
-    erand_group = ['erand_er', 'erand_sws', 'erand_sfs', 'erand_swr', 'erand_sfr']
+    erand_group = [
+        'erand_er', 
+        'erand_sws', 
+        'erand_sfs', 
+        'erand_swr', 
+        'erand_sfr']
     static_tag_to_kind = {
         'er_static': 'er',
         'sw_static': 'sw',

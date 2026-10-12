@@ -5,14 +5,14 @@ from tnet_analysis.network_generators import GenerateNullModel
 from tnet_analysis.latency_measures import (
     ComputeSmartTemporalDistanceMeasures,
     ComputeDrunkTemporalDistanceMeasures,
-    ComputeCirculationLatency,
+    ComputeReturnLatency,
 )
 from tnet_analysis.dynamism_and_memory import (
     ComputeDynamism,
-    ComputeReturnability,
+    ComputeRetention,
 )
 from tnet_analysis.segregation_and_cohesion import (
-    ComputeStaticClustering,
+    ComputeSpatialClustering,
     ComputeTemporalClustering,
 )
 
@@ -43,7 +43,7 @@ def func2(x):
 
 
 def func3(x):
-    return ComputeStaticClustering(x, summary_stat="both")
+    return ComputeSpatialClustering(x, summary_stat="both")
 
 
 def func4(x):
@@ -51,15 +51,15 @@ def func4(x):
 
 
 def func5(x, hops_per_frame=1, latency_unit="frames"):
-    summary_circulation, mean_count = ComputeCirculationLatency(
+    summary_return, mean_count = ComputeReturnLatency(
         x, summary_stat="both", hops_per_frame=hops_per_frame,
         latency_unit=latency_unit,
     )
-    return summary_circulation + [mean_count]
+    return summary_return + [mean_count]
 
 
 def func6(x):
-    return ComputeReturnability(x, summary_stat="both")
+    return ComputeRetention(x, summary_stat="both")
 
 
 def EvaluateMetric(ifunc, tnet, tnet_nodiag, random_seed=None, n_reps=None,
@@ -140,7 +140,7 @@ def qIntSeg(tsdata, isubj, ideg, itag, ifunc, hops_per_frame=1,
 
 
 outdir = "data/output_multihop"
-indir = "/Users/sima/Documents/MATLAB/empirical"
+indir = "data/input"
 
 degList = np.logspace(np.log10(0.1), np.log10(83.04), num=54)[:10]
 
@@ -198,8 +198,8 @@ METRIC_SPECS = [
         False,
     ),
     (
-        "static_clustering",
-        PairNames("static_clustering"),
+        "spatial_clustering",
+        PairNames("spatial_clustering"),
         func3,
         True,
         False,
@@ -212,16 +212,16 @@ METRIC_SPECS = [
         False,
     ),
     (
-        "circulation",
-        PairNames("circulation_latency")
-        + ("circulation_mean_count",),
+        "return",
+        PairNames("return_latency")
+        + ("return_mean_count",),
         func5,
         False,
         False,
     ),
     (
-        "returnability",
-        PairNames("returnability"),
+        "retention",
+        PairNames("retention"),
         func6,
         False,
         False,

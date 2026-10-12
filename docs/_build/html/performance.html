@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Parallel computation and troubleshooting &#8212; tnet_analysis 1.0.2 User Guide</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=12dfc556" />
+    <script src="_static/documentation_options.js?v=1ed6394b"></script>
+    <script src="_static/doctools.js?v=9a2dae69"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="API reference" href="api.html" />
+    <link rel="prev" title="Output layouts and summaries" href="outputs.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="parallel-computation-and-troubleshooting">
+<h1>Parallel computation and troubleshooting<a class="headerlink" href="#parallel-computation-and-troubleshooting" title="Link to this heading">¶</a></h1>
+<section id="start-small">
+<h2>Start small<a class="headerlink" href="#start-small" title="Link to this heading">¶</a></h2>
+<p>Run one subject, a few degrees and a modest trial count first. Check shapes,
+achieved degrees and NaN fractions, then time sparse and dense cases.
+Increase worker counts gradually, observing memory and scratch use.
+Hardware threads are not equivalent to physical cores, and more workers
+do not guarantee a faster job.</p>
+<p>A dense adjacency tensor needs T*N*N*itemsize bytes. A 296-frame,
+400-node uint8 tensor needs about 45 MiB; float64 needs about 361 MiB.
+Worker copies, FC tensors, temporary arrays and walk trials add to this.
+Random-walk first-hit storage scales with trials*N*N even when full FPT
+output is disabled. Avoid requesting full per-trial matrices unnecessarily.
+Its dense neighbor table also uses int32 storage proportional to T*N*N.
+The dynamism implementation forms a T-by-T similarity matrix, so long
+recordings can add time-axis memory costs as well.</p>
+<p>Prepare FC once per subject/method/window/lag and threshold sets once per
+FC tensor. Reuse each network across metrics. Compute hop-independent
+metrics once rather than repeating them for every hop allowance.
+One-hop return uses packed reachability; the multi-hop return branch uses
+dense matrix propagation, so larger hop allowances can be expensive.</p>
+</section>
+<section id="process-worker-example">
+<h2>Process-worker example<a class="headerlink" href="#process-worker-example" title="Link to this heading">¶</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Process subjects in independent workers; no files are written."""</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">joblib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Parallel</span><span class="p">,</span> <span class="n">delayed</span><span class="p">,</span> <span class="n">parallel_config</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.analysis_preparation</span><span class="w"> </span><span class="kn">import</span> <span class="n">PrepareConnectivity</span><span class="p">,</span> <span class="n">PrepareTemporalNetwork</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.latency_measures</span><span class="w"> </span><span class="kn">import</span> <span class="n">ComputeSmartTemporalDistanceMeasures</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.segregation_and_cohesion</span><span class="w"> </span><span class="kn">import</span> <span class="n">ComputeSpatialClustering</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">ComputeSubject</span><span class="p">(</span><span class="n">subject_index</span><span class="p">,</span> <span class="n">signals</span><span class="p">):</span>
+    <span class="n">seed</span> <span class="o">=</span> <span class="mi">2000</span> <span class="o">+</span> <span class="n">subject_index</span>
+    <span class="n">fcs</span> <span class="o">=</span> <span class="n">PrepareConnectivity</span><span class="p">(</span><span class="n">signals</span><span class="p">,</span> <span class="n">window</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">lag</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+    <span class="n">network</span> <span class="o">=</span> <span class="n">PrepareTemporalNetwork</span><span class="p">(</span><span class="n">fcs</span><span class="p">,</span> <span class="s2">"original"</span><span class="p">,</span> <span class="n">target_degree</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">)</span>
+    <span class="n">no_diagonal</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">diagonal</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">network</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">no_diagonal</span><span class="p">[:,</span> <span class="n">diagonal</span><span class="p">,</span> <span class="n">diagonal</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">"subject_index"</span><span class="p">:</span> <span class="n">subject_index</span><span class="p">,</span>
+        <span class="s2">"smart"</span><span class="p">:</span> <span class="n">ComputeSmartTemporalDistanceMeasures</span><span class="p">(</span><span class="n">network</span><span class="p">,</span> <span class="n">summary_stat</span><span class="o">=</span><span class="s2">"both"</span><span class="p">),</span>
+        <span class="s2">"spatial_clustering"</span><span class="p">:</span> <span class="n">ComputeSpatialClustering</span><span class="p">(</span><span class="n">no_diagonal</span><span class="p">,</span> <span class="s2">"both"</span><span class="p">),</span>
+    <span class="p">}</span>
+
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
+    <span class="n">subjects</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">200</span><span class="p">)</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+    <span class="k">with</span> <span class="n">parallel_config</span><span class="p">(</span><span class="n">backend</span><span class="o">=</span><span class="s2">"loky"</span><span class="p">,</span> <span class="n">n_jobs</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">inner_max_num_threads</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="n">results</span> <span class="o">=</span> <span class="n">Parallel</span><span class="p">()(</span>
+            <span class="n">delayed</span><span class="p">(</span><span class="n">ComputeSubject</span><span class="p">)(</span><span class="n">index</span><span class="p">,</span> <span class="n">signals</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">signals</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">subjects</span><span class="p">)</span>
+        <span class="p">)</span>
+    <span class="k">for</span> <span class="n">result</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Download <a class="reference download internal" download="" href="_downloads/4c91f579dcdbffd202c03368e3a35e24/parallel_subjects.py"><code class="xref download docutils literal notranslate"><span class="pre">parallel_subjects.py</span></code></a>.
+The worker analyzes one small subject and returns named results.
+The main guard supports process-based execution. Run it as a script,
+not by starting workers during module import.</p>
+<p>Limit nested numerical-library threads when using process workers.
+Joblib’s Loky configuration below limits supported inner thread pools.
+Benchmark on the target machine; no fixed worker count is optimal everywhere.</p>
+</section>
+<section id="scratch-and-checkpointing">
+<h2>Scratch and checkpointing<a class="headerlink" href="#scratch-and-checkpointing" title="Link to this heading">¶</a></h2>
+<p>For large shared arrays, Joblib can use disk-backed memory maps.
+Choose an explicitly configured local scratch directory with enough space,
+pass it via <code class="docutils literal notranslate"><span class="pre">temp_folder</span></code>, and monitor the filesystem containing that
+directory, not just the output disk.</p>
+<p>Use a scoped temporary directory for one subject/chunk so normal completion
+cleans it. An abrupt kill can leave files: only remove directories known
+to belong to stopped runs. Never clear a shared scratch root indiscriminately.</p>
+<p>Save completed subjects individually, preferably by writing a temporary
+file and atomically renaming it. Resume only when the saved shape and
+configuration match. Neither metric functions nor this simple example
+automatically implement checkpointing.</p>
+</section>
+<section id="common-problems">
+<h2>Common problems<a class="headerlink" href="#common-problems" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>Non-finite Pearson FC:</strong> check missing samples and constant regions
+within each window. Decide a documented exclusion or imputation policy;
+do not blindly replace undefined correlations with zero.</p></li>
+<li><p><strong>No space left on device / pickling error:</strong> check Joblib scratch,
+available space and inode counts. The pickling message can wrap a
+disk-write failure.</p></li>
+<li><p><strong>First call is slow:</strong> Numba compilation is expected; compare warmed
+timings. Set <code class="docutils literal notranslate"><span class="pre">NUMBA_CACHE_DIR</span></code> to a writable folder if needed.</p></li>
+<li><p><strong>Means and medians differ:</strong> sparse node-score distributions can have
+positive means and zero medians. Inspect scores and eligible counts.</p></li>
+<li><p><strong>Counts look negative:</strong> give dynamism waiting diagonals; do not change
+node axes or include wrapper padding in calculations.</p></li>
+<li><p><strong>Memory pressure:</strong> lower worker count, use compact binary dtypes,
+avoid full outputs and keep subject processing bounded.</p></li>
+</ul>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Temporal Network Analysis Toolkit</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Installation and first analysis</a></li>
+<li class="toctree-l1"><a class="reference internal" href="data_and_parameters.html">Inputs and time parameters</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflows.html">Signals, FC and null models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="measures.html">Choosing and interpreting measures</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output layouts and summaries</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Parallel computation and troubleshooting</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#start-small">Start small</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#process-worker-example">Process-worker example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#scratch-and-checkpointing">Scratch and checkpointing</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#common-problems">Common problems</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+</ul>
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2026, tnet_analysis contributors.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 7.4.7</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/performance.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -2,21 +2,70 @@ import numpy as np
 import warnings
 from scipy.stats import norm
 from sklearn.metrics import normalized_mutual_info_score
+from numba import njit
+from ._summary import SummarizeScores as _summarize_scores
+from ._temporal_statistics import (
+    ValidateTemporalAdjacency, PositiveInteger, EdgeOverlapAndPersistence,
+    NeighborhoodMemoryScores, LinkBurstinessScores,
+)
 
 
-def _summarize_scores(values, summary_stat=None):
-    """Summarize node scores with percentiles or a requested statistic."""
-    if summary_stat is None or summary_stat == "percentiles":
-        return np.nanpercentile(values, [5, 25, 50, 75, 95]).tolist()
-    if summary_stat == "both":
-        return [float(np.nanmean(values)), float(np.nanmedian(values))]
-    if summary_stat == "median":
-        return float(np.nanmedian(values))
-    if summary_stat == "mean":
-        return float(np.nanmean(values))
-    raise ValueError(
-        "summary_stat must be None, 'percentiles', 'mean', 'median', or 'both'."
-    )
+@njit(cache=True)
+def _RetentionScores(adjacency):
+    """Track previously seen neighbors without building Python sets."""
+    T, N, _ = adjacency.shape
+    scores = np.full(N, np.nan)
+    for i in range(N):
+        past = np.zeros(N, dtype=np.bool_)
+        has_past = False
+        total = 0.0
+        observations = 0
+        for t in range(T):
+            degree = 0
+            returning = 0
+            for j in range(N):
+                if j != i and adjacency[t, i, j] > 0:
+                    degree += 1
+                    if past[j]:
+                        returning += 1
+                    past[j] = True
+            if degree:
+                if has_past:
+                    total += returning / degree
+                    observations += 1
+                has_past = True
+        if observations:
+            scores[i] = total / observations
+    return scores
+
+
+@njit(cache=True)
+def _WindowedRetentionScores(adjacency, delta):
+    """Track each neighbor's last contact in O(N) workspace per node."""
+    T, N, _ = adjacency.shape
+    scores = np.full(N, np.nan)
+    for i in range(N):
+        last_seen = np.full(N, -1, dtype=np.int64)
+        has_past = False
+        total = 0.0
+        observations = 0
+        for t in range(T):
+            degree = 0
+            returning = 0
+            for j in range(N):
+                if j != i and adjacency[t, i, j] > 0:
+                    degree += 1
+                    if last_seen[j] >= 0 and t - last_seen[j] <= delta:
+                        returning += 1
+                    last_seen[j] = t
+            if degree:
+                if has_past:
+                    total += returning / degree
+                    observations += 1
+                has_past = True
+        if observations:
+            scores[i] = total / observations
+    return scores
 
 
 def ComputeTemporalMutualInformation(adjacency_matrices):
@@ -64,7 +113,7 @@ def ComputeDynamism(tnet):
     Notes:
         - Uses lower-triangular edges (i<j) for all edgewise computations.
         - Entropy term gEnt excludes edges that are always 0 or always 1 to avoid log(0).
-        - Entropy normalization uses: maxH = -log(0.5) * [N(N-1)/2] (matches original code).
+        - Entropy normalization uses: maxH = -log(0.5) * [N(N-1)/2].
         - Cosine similarity is computed on flattened lower-triangular edge vectors; rows
         with zero norm (empty graphs) are handled so that sim(t,t+1)=1 when both are empty, and rows involving an empty snapshot are set to 0 elsewhere to avoid spurious effects.
 
@@ -163,23 +212,8 @@ def ComputeTemporalEdgeOverlap(adjacency_matrices):
     Returns:
         avg_jaccard: float. Mean Jaccard similarity across consecutive pairs (t, t+1). NaN if T < 2 or all unions are empty.
     """
-    T, N, _ = adjacency_matrices.shape
-    if T < 2:
-        return np.nan
-
-    iu, ju = np.triu_indices(N, k=1)
-    jaccards = []
-
-    for t in range(T - 1):
-        a = adjacency_matrices[t][iu, ju] > 0
-        b = adjacency_matrices[t + 1][iu, ju] > 0
-        inter = np.count_nonzero(a & b)
-        union = np.count_nonzero(a | b)
-        if union == 0:
-            continue
-        jaccards.append(inter / union)
-
-    return np.mean(jaccards) if len(jaccards) else np.nan
+    adjacency_matrices = ValidateTemporalAdjacency(adjacency_matrices, undirected=True)
+    return float(EdgeOverlapAndPersistence(adjacency_matrices)[0])
 
 
 def ComputeEdgePersistenceRate(adjacency_matrices):
@@ -190,25 +224,10 @@ def ComputeEdgePersistenceRate(adjacency_matrices):
         adjacency_matrices: np.ndarray, shape (T, N, N). Binary temporal adjacency.
 
     Returns:
-        avg_persist: float. Mean persistence fraction over t where at least one edge existed. NaN if T < 2 or no edges ever exist at any t.
+        avg_persist: float. Mean persistence fraction over source frames t < T-1 with at least one edge. NaN if there are no eligible frames. Frames, not individual edges, receive equal weight.
     """
-    T, N, _ = adjacency_matrices.shape
-    if T < 2:
-        return np.nan
-
-    iu, ju = np.triu_indices(N, k=1)
-    vals = []
-
-    for t in range(T - 1):
-        a = adjacency_matrices[t][iu, ju] > 0
-        b = adjacency_matrices[t + 1][iu, ju] > 0
-        active_t = np.count_nonzero(a)
-        if active_t == 0:
-            continue
-        persist = np.count_nonzero(a & b) / active_t
-        vals.append(persist)
-
-    return np.mean(vals) if len(vals) else np.nan
+    adjacency_matrices = ValidateTemporalAdjacency(adjacency_matrices, undirected=True)
+    return float(EdgeOverlapAndPersistence(adjacency_matrices)[1])
 
 
 def ComputeNeighborhoodMemory(adjacency_matrices, lag=1, summary_stat=None):
@@ -229,102 +248,84 @@ def ComputeNeighborhoodMemory(adjacency_matrices, lag=1, summary_stat=None):
         - If a node has no neighbors at both t and t+lag, that pair is skipped.
         - Nodes with no valid pairs get memory = 0.
     """
-    T, N, _ = adjacency_matrices.shape
-    memory_scores = np.zeros(N)
-
-    for i in range(N):
-        overlaps = []
-        for t in range(T - lag):
-            neighbors_t = set(np.where(adjacency_matrices[t, i] > 0)[0])
-            neighbors_tlag = set(np.where(adjacency_matrices[t + lag, i] > 0)[0])
-
-            if neighbors_t or neighbors_tlag:
-                intersection = neighbors_t.intersection(neighbors_tlag)
-                union = neighbors_t.union(neighbors_tlag)
-                jaccard_similarity = len(intersection) / len(union)
-                overlaps.append(jaccard_similarity)
-
-        memory_scores[i] = np.mean(overlaps) if overlaps else 0.0
-
+    adjacency_matrices = ValidateTemporalAdjacency(adjacency_matrices)
+    lag = PositiveInteger(lag, "lag")
+    memory_scores = NeighborhoodMemoryScores(adjacency_matrices, lag)
     return _summarize_scores(memory_scores, summary_stat=summary_stat)
 
 
-def ComputeReturnability(adjacency_matrices, summary_stat=None):
+def ComputeRetention(adjacency_matrices, summary_stat=None, *, delta=None):
     """
-    Compute node-wise returnability in a temporal network.
-    For each node i and time t, define: - neighbors_t = current neighbors of i (excluding self). - past_neighbors = union of all neighbors of i seen before t. The instantaneous returnability at time t is: |neighbors_t ∩ past_neighbors| / |neighbors_t|, when neighbors_t ≠ ∅. The node’s score is the mean of these values across time.
+    Compute node-wise retention in a temporal network.
+    The instantaneous score is the fraction of current neighbors encountered
+    previously. With delta=None, all earlier frames are eligible.
+    With positive integer delta, only frames max(0,t-delta)
+    through t-1 are eligible. A node's score averages eligible nonempty frames.
 
     Args:
         adjacency_matrices: np.ndarray, shape (T, N, N). Sequence of binary adjacency matrices (0/1). Symmetric, diagonal ignored.
         summary_stat: {None, "percentiles", "mean", "median", "both"}, optional (default=None). Return five percentiles by default, one scalar, or [mean, median].
+        delta: positive int or None, optional (default=None). Lookback lifetime in adjacency frames; None retains unlimited history. delta=1 compares against the immediately preceding frame.
 
     Returns:
         summary: list[float] or float. Five percentiles by default, or the requested scalar summary.
+
+    Notes:
+        - The first nonempty neighbor observation is excluded.
+        - Empty current neighborhoods are skipped. After a node's first
+        nonempty observation, a nonempty frame with no eligible recent partners
+        contributes zero, even when all previous contacts have expired.
+        - Nodes with fewer than two nonempty observations have NaN scores.
+        Self-connections are excluded. Current-frame contacts cannot count as
+        their own history; each partner's lifetime resets when it is observed.
+        - delta counts adjacency frames, not FC window length, hop substeps or
+        elapsed physical time. There is no wrapping at recording boundaries.
+        - delta=None uses unlimited history; a positive delta restricts the lookback lifetime.
+        Both cached compiled modes take O(T*N^2) time and O(N) workspace beyond
+        the input/output; finite windows do not require copying past frames.
     """
-    T, N, _ = adjacency_matrices.shape
-    returnability_scores = np.full(N, np.nan)
+    if delta is None:
+        retention_scores = _RetentionScores(adjacency_matrices)
+    else:
+        delta = PositiveInteger(delta, "delta")
+        # Larger lifetimes are equivalent to full history; bound the integer
+        # passed to the compiled kernel even for arbitrarily large Python ints.
+        delta = min(delta, adjacency_matrices.shape[0])
+        retention_scores = _WindowedRetentionScores(adjacency_matrices, delta)
+    return _summarize_scores(retention_scores, summary_stat=summary_stat)
 
-    for i in range(N):
-        past_neighbors = set()
-        vals = []
-
-        for t in range(T):
-            neighbors_t = set(np.where(adjacency_matrices[t, i] > 0)[0])
-            neighbors_t.discard(i)
-
-            if not neighbors_t:
-                continue
-
-            if past_neighbors:
-                old_friends = neighbors_t & past_neighbors
-                vals.append(len(old_friends) / len(neighbors_t))
-
-            past_neighbors |= neighbors_t
-
-        if vals:
-            returnability_scores[i] = float(np.mean(vals))
-
-    return _summarize_scores(returnability_scores, summary_stat=summary_stat)
-
-def LinkBurstiness(adjacency_matrices):
+def ComputeLinkBurstiness(adjacency_matrices, *, event_mode="activations"):
     """
     Compute burstiness index B = (σ - μ) / (σ + μ) per link over time.
 
     Args:
         adjacency_matrices: array-like, shape (T, N, N). Sequence of binary (0/1) adjacency matrices for an undirected network. Diagonal is ignored if present.
+        event_mode: {"activations", "onsets"}, optional (default="activations"). Count every active frame, or only the start of each uninterrupted active run.
 
     Returns:
-        link_burstiness: np.ndarray, shape (N, N). Burstiness per link; NaN where a link has fewer than 3 activations.
+        link_burstiness: np.ndarray, shape (N, N). Burstiness per link; NaN where a link has fewer than 3 events in the selected mode. Diagonal is NaN.
 
     Notes:
-        - Complexity is proportional to the number of *active* links with ≥3 events,
-        not to N^2. This is typically much faster than triple nesting.
+        - Uses population standard deviation of the observed inter-event gaps.
+        Regular intervals give -1; positive values indicate variable gaps.
+        A sustained link gives -1 in activation mode, but only one event (NaN)
+        in onset mode. These definitions answer different questions.
+        - The uncorrected burstiness statistic is sample-size dependent; values
+        based on only a few gaps should not be treated as reliable inference.
+        Recording-boundary gaps are excluded; no periodic wrapping is assumed.
+        - Streaming compiled accumulation uses O(N^2) workspace, no copied
+        T-by-N-by-N binary tensor or per-link event lists. Input is never modified.
     """
-    A = np.asarray(adjacency_matrices, dtype=bool)
-    T, N, _ = A.shape
-    if N == A.shape[2]:
-        A[:, np.arange(N), np.arange(N)] = False
+    adjacency_matrices = ValidateTemporalAdjacency(adjacency_matrices, undirected=True)
+    if event_mode not in {"activations", "onsets"}:
+        raise ValueError("event_mode must be 'activations' or 'onsets'.")
+    return LinkBurstinessScores(adjacency_matrices, event_mode == "onsets")
 
-    counts = A.sum(axis=0)
-    mask = counts >= 3
-    iu, ju = np.triu_indices(N, k=1)
-    sel = mask[iu, ju]
-    iu, ju = iu[sel], ju[sel]
 
-    A2 = A.reshape(T, N * N)
-    cols = iu * N + ju
+# Alternative function name supported as an alias.
+LinkBurstiness = ComputeLinkBurstiness
 
-    out = np.full((N, N), np.nan, dtype=float)
-
-    for c, i, j in zip(cols, iu, ju):
-        times = np.flatnonzero(A2[:, c])
-        gaps = np.diff(times)
-        mu = gaps.mean()
-        sigma = gaps.std(ddof=0)
-        denom = (sigma + mu)
-        if denom > 0:
-            b = (sigma - mu) / denom
-            out[i, j] = b
-            out[j, i] = b  # symmetric
-
-    return out
+# Alternative function names supported as aliases.
+ComputeReturnability = ComputeRetention
+_ReturnabilityScores = _RetentionScores
+_WindowedReturnabilityScores = _WindowedRetentionScores

@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Signals, FC and null models &#8212; tnet_analysis 1.0.2 User Guide</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=12dfc556" />
+    <script src="_static/documentation_options.js?v=1ed6394b"></script>
+    <script src="_static/doctools.js?v=9a2dae69"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Choosing and interpreting measures" href="measures.html" />
+    <link rel="prev" title="Inputs and time parameters" href="data_and_parameters.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="signals-fc-and-null-models">
+<h1>Signals, FC and null models<a class="headerlink" href="#signals-fc-and-null-models" title="Link to this heading">¶</a></h1>
+<section id="methods-versus-tags">
+<h2>Methods versus tags<a class="headerlink" href="#methods-versus-tags" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">fc_method=&quot;original1&quot;</span></code> selects sliding-window Pearson FC;
+<code class="docutils literal notranslate"><span class="pre">&quot;original2&quot;</span></code> selects instantaneous z-score products.
+These are methods, not null-model tags. <code class="docutils literal notranslate"><span class="pre">tag=&quot;original&quot;</span></code> means no
+randomization for either method. Select method and tag independently.</p>
+<p>Instantaneous FC uses <code class="docutils literal notranslate"><span class="pre">FC[t,i,j]</span> <span class="pre">=</span> <span class="pre">z[t,i]*z[t,j]</span></code>, standardizing each
+region over the full recording. Products are signed and not bounded by
+[-1,1]. With population standardization (ddof=0), their time average equals
+whole-record Pearson correlation. Constant regions are rejected.</p>
+</section>
+<section id="complete-signal-workflow">
+<h2>Complete signal workflow<a class="headerlink" href="#complete-signal-workflow" title="Link to this heading">¶</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="sd">"""Compare FC methods and transformations using generated signals."""</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.analysis_preparation</span><span class="w"> </span><span class="kn">import</span> <span class="n">PrepareConnectivity</span><span class="p">,</span> <span class="n">PrepareTemporalNetwork</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.dfc_to_tnet</span><span class="w"> </span><span class="kn">import</span> <span class="n">FindThresholdsForAverageDegrees</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.latency_measures</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ComputeAverageDegree</span><span class="p">,</span> <span class="n">ComputeSmartTemporalDistanceMeasures</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">100</span><span class="p">)</span>
+<span class="n">signals</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="mi">100</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+<span class="n">degrees</span> <span class="o">=</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">]</span>
+<span class="n">tags</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="s2">"original"</span><span class="p">,</span> <span class="s2">"emp_static"</span><span class="p">,</span> <span class="s2">"time"</span><span class="p">,</span> <span class="s2">"uniform"</span><span class="p">,</span> <span class="s2">"phase_rand0"</span><span class="p">,</span> <span class="s2">"phase_rand1"</span><span class="p">,</span>
+    <span class="s2">"er_static"</span><span class="p">,</span> <span class="s2">"sw_static"</span><span class="p">,</span> <span class="s2">"sf_static"</span><span class="p">,</span> <span class="s2">"eAct"</span><span class="p">,</span> <span class="s2">"eActTemplate"</span><span class="p">,</span>
+    <span class="s2">"eRndTemplate"</span><span class="p">,</span> <span class="s2">"erand_er"</span><span class="p">,</span> <span class="s2">"erand_sws"</span><span class="p">,</span> <span class="s2">"erand_sfs"</span><span class="p">,</span> <span class="s2">"erand_swr"</span><span class="p">,</span>
+    <span class="s2">"erand_sfr"</span><span class="p">,</span>
+<span class="p">]</span>
+
+<span class="k">for</span> <span class="n">method_index</span><span class="p">,</span> <span class="n">method</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">([</span><span class="s2">"original1"</span><span class="p">,</span> <span class="s2">"original2"</span><span class="p">]):</span>
+    <span class="k">for</span> <span class="n">tag_index</span><span class="p">,</span> <span class="n">tag</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">tags</span><span class="p">):</span>
+        <span class="n">seed</span> <span class="o">=</span> <span class="mi">1000</span> <span class="o">+</span> <span class="mi">100</span> <span class="o">*</span> <span class="n">method_index</span> <span class="o">+</span> <span class="mi">10</span> <span class="o">*</span> <span class="n">tag_index</span>
+        <span class="n">fcs</span> <span class="o">=</span> <span class="n">PrepareConnectivity</span><span class="p">(</span>
+            <span class="n">signals</span><span class="p">,</span> <span class="n">tag</span><span class="o">=</span><span class="n">tag</span><span class="p">,</span> <span class="n">fc_method</span><span class="o">=</span><span class="n">method</span><span class="p">,</span> <span class="n">window</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">lag</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+            <span class="n">random_seed</span><span class="o">=</span><span class="n">seed</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">thresholds</span> <span class="o">=</span> <span class="n">FindThresholdsForAverageDegrees</span><span class="p">(</span><span class="n">fcs</span><span class="p">,</span> <span class="n">degrees</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">degree_index</span><span class="p">,</span> <span class="n">degree</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">degrees</span><span class="p">):</span>
+            <span class="n">network</span> <span class="o">=</span> <span class="n">PrepareTemporalNetwork</span><span class="p">(</span>
+                <span class="n">fcs</span><span class="p">,</span> <span class="n">tag</span><span class="o">=</span><span class="n">tag</span><span class="p">,</span> <span class="n">target_degree</span><span class="o">=</span><span class="n">degree</span><span class="p">,</span>
+                <span class="n">threshold</span><span class="o">=</span><span class="n">thresholds</span><span class="p">[</span><span class="n">degree_index</span><span class="p">],</span> <span class="n">seed</span><span class="o">=</span><span class="n">seed</span> <span class="o">+</span> <span class="n">degree_index</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">achieved</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">ComputeAverageDegree</span><span class="p">(</span><span class="n">network</span><span class="p">)</span>
+            <span class="n">metrics</span> <span class="o">=</span> <span class="n">ComputeSmartTemporalDistanceMeasures</span><span class="p">(</span><span class="n">network</span><span class="p">,</span> <span class="n">summary_stat</span><span class="o">=</span><span class="s2">"both"</span><span class="p">)</span>
+            <span class="nb">print</span><span class="p">(</span><span class="n">method</span><span class="p">,</span> <span class="n">tag</span><span class="p">,</span> <span class="n">degree</span><span class="p">,</span> <span class="nb">round</span><span class="p">(</span><span class="n">achieved</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span> <span class="n">metrics</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Download <a class="reference download internal" download="" href="_downloads/7348c034ff1cf259dc9eedcec5ed41b0/signal_workflow.py"><code class="xref download docutils literal notranslate"><span class="pre">signal_workflow.py</span></code></a>.
+<code class="docutils literal notranslate"><span class="pre">PrepareConnectivity</span></code> transforms signals before FC.
+<code class="docutils literal notranslate"><span class="pre">PrepareTemporalNetwork</span></code> thresholds that FC and transforms the network.
+Passing unrandomized FC with a phase tag into the second function does not
+retroactively randomize signals.</p>
+</section>
+<section id="thresholding">
+<h2>Thresholding<a class="headerlink" href="#thresholding" title="Link to this heading">¶</a></h2>
+<p>Temporal binarization finds one signed threshold for the FC tensor and
+applies <code class="docutils literal notranslate"><span class="pre">FC</span> <span class="pre">&gt;</span> <span class="pre">threshold</span></code> to every frame. It targets average degree
+over the recording, not identical degree in every frame.
+<code class="docutils literal notranslate"><span class="pre">FindThresholdsForAverageDegrees</span></code> uses a finite candidate grid (resolution
+100 by default); requested degree is approximate. Record the achieved
+degree using <code class="docutils literal notranslate"><span class="pre">ComputeAverageDegree</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">emp_static</span></code> averages FC over time, selects strongest <strong>absolute-valued</strong>
+off-diagonal entries and repeats that static network. Ties can exceed the
+requested edge count. This differs from temporal signed thresholding.</p>
+<p>For several degrees, compute FC once, find all thresholds together and pass
+the corresponding threshold into network preparation. Recompute thresholds
+when signals or FC method change; phase surrogates need their own FC.</p>
+</section>
+<section id="all-supported-analysis-tags">
+<h2>All supported analysis tags<a class="headerlink" href="#all-supported-analysis-tags" title="Link to this heading">¶</a></h2>
+<p>There are 17 analysis tags. They act at different stages: phase surrogates
+modify signals before FC, <code class="docutils literal notranslate"><span class="pre">emp_static</span></code> changes binarization, and network
+nulls transform the thresholded adjacency. None selects an FC method.</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 20.0%" />
+<col style="width: 80.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Tag</p></th>
+<th class="head"><p>Operation</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">original</span></code></p></td>
+<td><p>Keep the signal and temporal network.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">emp_static</span></code></p></td>
+<td><p>Repeat a static network formed from mean FC.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">er_static</span></code></p></td>
+<td><p>Repeat one random snapshot with the mean reference edge count.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">sw_static</span></code></p></td>
+<td><p>Repeat one small-world-style snapshot with the mean reference edge count.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sf_static</span></code></p></td>
+<td><p>Repeat one rank-weighted snapshot with the mean reference edge count.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">time</span></code></p></td>
+<td><p>Shuffle adjacency frames, not raw signals.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">uniform</span></code></p></td>
+<td><p>Generate random frames with approximately constant edge count matched to the mean input density.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">eAct</span></code></p></td>
+<td><p>Randomize each edge’s active frames, preserving its activation total.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">eActTemplate</span></code></p></td>
+<td><p>Use an empirically ranked edge template with framewise rewiring.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">eRndTemplate</span></code></p></td>
+<td><p>Use a randomly ranked edge template with framewise rewiring.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">erand_er</span></code></p></td>
+<td><p>Randomize edge locations while retaining each frame’s edge count.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">erand_sws</span></code></p></td>
+<td><p>Generate small-world-style frames with a shared node ordering.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">erand_sfs</span></code></p></td>
+<td><p>Generate rank-weighted frames with a shared node ordering.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">erand_swr</span></code></p></td>
+<td><p>Generate small-world-style frames, then independently relabel each frame.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">erand_sfr</span></code></p></td>
+<td><p>Generate rank-weighted frames, then independently relabel each frame.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">phase_rand0</span></code></p></td>
+<td><p>Add independent Fourier phases per region.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">phase_rand1</span></code></p></td>
+<td><p>Add shared Fourier phases across regions.</p></td>
+</tr>
+</tbody>
+</table>
+<section id="reference-network">
+<h3>Reference network<a class="headerlink" href="#reference-network" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">original</span></code> retains the selected signals and temporal thresholding. It is
+valid with either <code class="docutils literal notranslate"><span class="pre">fc_method=&quot;original1&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;original2&quot;</span></code>. In network
+preparation, isolated-node trimming and padding can still change node order;
+see the warning below.</p>
+</section>
+<section id="static-controls">
+<h3>Static controls<a class="headerlink" href="#static-controls" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">emp_static</span></code> preserves a static representation of mean FC, not the original
+sequence of framewise edges. All frames are identical. Its absolute-valued
+edge selection can include strong negative FC; temporal thresholding instead
+uses signed values. Calling <code class="docutils literal notranslate"><span class="pre">GenerateNullModel(tnet,</span> <span class="pre">&quot;emp_static&quot;)</span></code> alone
+does not average FC or construct this static graph: that step belongs to
+<code class="docutils literal notranslate"><span class="pre">PrepareTemporalNetwork</span></code> / <code class="docutils literal notranslate"><span class="pre">BinarizeDFCFromConnectivity</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">er_static</span></code>, <code class="docutils literal notranslate"><span class="pre">sw_static</span></code> and <code class="docutils literal notranslate"><span class="pre">sf_static</span></code> generate one snapshot using
+the rounded mean reference edge count, then repeat it for all T frames.
+They remove temporal topology changes and reference edge identities. They
+do not preserve empirical node degrees, clustering or community structure.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">er_static</span></code> samples the requested number of unordered pairs uniformly
+without replacement: a fixed-edge-count random graph, not G(N,p).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sw_static</span></code> first selects pairs in increasing node-index separation,
+then rewires a fraction (0.02 by default). This is a small-world-style
+local backbone, not an exact Watts-Strogatz ring-lattice implementation.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sf_static</span></code> samples pairs without replacement with probabilities
+proportional to the product of node-rank weights, where rank weight is
+proportional to rank**(-gamma), gamma=2.5 by default. This encourages
+hubs but does not guarantee a fitted power-law degree distribution.</p></li>
+</ul>
+<p>To change generator-specific parameters, use the corresponding lower-level
+generator. The preparation wrapper does not expose their rewiring fraction
+or power-law exponent.</p>
+</section>
+<section id="time-order-and-uniform-density-controls">
+<h3>Time-order and uniform-density controls<a class="headerlink" href="#time-order-and-uniform-density-controls" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">time</span></code> permutes whole adjacency frames. It preserves each frame’s topology,
+the distribution of framewise edge counts and each edge’s total activations.
+It changes temporal order and usually changes consecutive-frame similarity,
+time-respecting paths and recurrence intervals. It does not shuffle raw
+time-series samples or randomize edges within a frame.</p>
+<p><code class="docutils literal notranslate"><span class="pre">uniform</span></code> generates fresh random edge sets with nearly equal counts across
+frames, matching the mean reference edge count. Integer rounding can produce
+one-edge differences. Neither the original count sequence nor per-edge
+activation totals are preserved. This is not a degree-sequence-preserving
+rewiring or a fixed-probability Bernoulli graph model.</p>
+</section>
+<section id="edge-activation-control">
+<h3>Edge-activation control<a class="headerlink" href="#edge-activation-control" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">eAct</span></code> independently chooses new active-frame positions for each edge,
+without replacement, retaining exactly its number of active frames.
+Thus edge identities, total density and the time-aggregated weighted graph
+are preserved, but per-frame edge counts, simultaneous activations,
+run lengths and temporal ordering are not. Always-active and never-active
+edges remain so. It is not the same as <code class="docutils literal notranslate"><span class="pre">time</span></code>, which permutes whole frames.</p>
+</section>
+<section id="ranked-template-controls">
+<h3>Ranked-template controls<a class="headerlink" href="#ranked-template-controls" title="Link to this heading">¶</a></h3>
+<p>Both template tags retain the original edge count in each frame. A frame
+with k edges starts with the first k edges of a common ranked template;
+floor(p_rewire*k) of those edges are selected for replacement. They model
+shared topology with controlled variation rather than unconstrained random
+frames. Selecting an edge for replacement does not guarantee that it changes:
+removed edges can be selected again.</p>
+<p><code class="docutils literal notranslate"><span class="pre">eActTemplate</span></code> ranks edges by their reference activation totals, highest
+first. This retains an empirical preference ordering, not exact per-edge
+activation totals. By default never-active edges are excluded from weighted
+replacement candidates. <code class="docutils literal notranslate"><span class="pre">eRndTemplate</span></code> instead assigns one random ranking
+to all possible edges; reference activation preferences are discarded, while
+the shared template still induces temporal persistence.</p>
+<p>The lower-level interface supports:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">p_rewire=0.02</span></code>: fraction selected for replacement per frame; 0 repeats
+template prefixes (identical graphs when edge counts are identical).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">alpha_rank=1.0</span></code>: replacement preference decays as
+1/(rank+1)**alpha_rank; 0 gives uniform rank weights.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">exclude_never_active=True</span></code>: suppresses never-active replacement
+candidates for <code class="docutils literal notranslate"><span class="pre">eActTemplate</span></code> only. A sparse candidate pool can trigger
+an unweighted fallback, so this is not an unconditional exclusion rule.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">eta_readd=1.0</span></code>: positive multiplier controlling the preference for
+re-adding edges selected for removal.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">GenerateNullModel</span></code> forwards these options to the template generator;
+<code class="docutils literal notranslate"><span class="pre">PrepareTemporalNetwork</span></code> uses the defaults. For customized templates:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.network_generators</span><span class="w"> </span><span class="kn">import</span> <span class="n">GenerateNullModel</span>
+
+<span class="n">template_network</span><span class="p">,</span> <span class="n">n_core</span> <span class="o">=</span> <span class="n">GenerateNullModel</span><span class="p">(</span>
+    <span class="n">reference_network</span><span class="p">,</span> <span class="s2">"eActTemplate"</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">,</span>
+    <span class="n">p_rewire</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">alpha_rank</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+    <span class="n">exclude_never_active</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">eta_readd</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>Use a binary reference network with diagonal ones. This call operates after
+FC construction and thresholding; it does not accept raw signals.</p>
+</section>
+<section id="framewise-synthetic-controls">
+<h3>Framewise synthetic controls<a class="headerlink" href="#framewise-synthetic-controls" title="Link to this heading">¶</a></h3>
+<p>All five <code class="docutils literal notranslate"><span class="pre">erand_*</span></code> tags regenerate frames with the corresponding reference
+edge counts, retaining the count sequence but not empirical edge identities.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">erand_er</span></code> samples a uniform fixed-size edge set in each frame.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">erand_sws</span></code> generates small-world-style local edges using the same node
+ordering across frames. The <code class="docutils literal notranslate"><span class="pre">s</span></code> suffix indicates shared labels.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">erand_sfs</span></code> generates rank-weighted edges using the same node ranks
+across frames. Shared ranks induce persistent hub preferences.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">erand_swr</span></code> uses the small-world-style construction and independently
+permutes node labels in each frame afterwards.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">erand_sfr</span></code> does the same for the rank-weighted construction. The <code class="docutils literal notranslate"><span class="pre">r</span></code>
+suffix indicates randomized labels, not a different edge-count model.</p></li>
+</ul>
+<p>Relabeling retains each generated frame’s unlabeled topology but removes
+fixed node identities across frames. It does not guarantee zero persistence
+or equal node degrees in a particular realization. The small-world generator
+currently resets NumPy’s RNG when a seed is passed for each frame; equal
+edge-count frames can therefore repeat the same graph before relabeling.
+Do not interpret <code class="docutils literal notranslate"><span class="pre">erand_sws</span></code> as independent draws at fixed seed. These
+tags use the same lower-level small-world and rank-weighted constructions
+described for the static controls.</p>
+</section>
+<section id="signal-phase-surrogates">
+<h3>Signal-phase surrogates<a class="headerlink" href="#signal-phase-surrogates" title="Link to this heading">¶</a></h3>
+<p>Both phase modes preserve means, Fourier magnitudes and circular
+autocovariance per region. Shared phases also preserve cross-spectra and
+sample covariance; independent phases generally do not. Neither guarantees
+unchanged sliding-window FC or every time-domain feature.</p>
+<p><code class="docutils literal notranslate"><span class="pre">phase_rand0</span></code> uses independent phase offsets for each region and frequency.
+It disrupts inter-region phase relationships while retaining each signal’s
+power spectrum. <code class="docutils literal notranslate"><span class="pre">phase_rand1</span></code> uses the same frequencywise offsets for all
+regions, retaining their relative phases and cross-spectra. Neither mode
+preserves the original samples or their amplitude distribution in general.
+Recompute FC and thresholds from the surrogate signals before analysis.</p>
+</section>
+<section id="choosing-an-interface-and-recording-seeds">
+<h3>Choosing an interface and recording seeds<a class="headerlink" href="#choosing-an-interface-and-recording-seeds" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ResolveAnalysisTag</span></code> recognizes all 17 tags and rejects unknown values.
+<code class="docutils literal notranslate"><span class="pre">GenerateNullModel</span></code> accepts the 15 network-level tags only: it does not
+handle phase surrogates or FC-method selection. Its <code class="docutils literal notranslate"><span class="pre">scale</span></code> argument is
+reserved and does not change generation. The preparation wrapper skips
+network generation if thresholding yields no off-diagonal edges.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Some generators trim isolated nodes, build a core and pad it into the
+leading node positions. Original node identities are not guaranteed.
+Use aggregate comparisons unless you verify an explicit node mapping.</p>
+</div>
+<p>Record separate seeds for surrogates, nulls, random walks and community
+detection. Network preparation seeds NumPy’s global RNG for generators
+using it. Process workers isolate that state; concurrent threads do not.</p>
+</section>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Temporal Network Analysis Toolkit</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Installation and first analysis</a></li>
+<li class="toctree-l1"><a class="reference internal" href="data_and_parameters.html">Inputs and time parameters</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Signals, FC and null models</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#methods-versus-tags">Methods versus tags</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#complete-signal-workflow">Complete signal workflow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#thresholding">Thresholding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#all-supported-analysis-tags">All supported analysis tags</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="measures.html">Choosing and interpreting measures</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output layouts and summaries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Parallel computation and troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+</ul>
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2026, tnet_analysis contributors.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 7.4.7</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/workflows.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

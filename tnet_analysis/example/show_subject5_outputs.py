@@ -5,6 +5,8 @@ import numpy as np
 from scipy.io import loadmat
 
 project_dir = Path(__file__).resolve().parent
+# Import the package from this checkout.
+sys.path.insert(0, str(project_dir.parents[1]))
 sys.path.insert(0, str(project_dir))
 for module_name in tuple(sys.modules):
     if module_name == "funcIntSeg" or module_name == "tnet_analysis" or module_name.startswith("tnet_analysis."):
@@ -20,8 +22,8 @@ from funcIntSeg import (
 
 print(f"Using {funcIntSeg.__file__}")
 
-indir = "/Users/sima/Documents/MATLAB/empirical"
-tsdata = loadmat(f"{indir}/ts_100subjs.mat")["tseries"]
+indir = "data/input"
+tsdata = loadmat(f"{indir}/time_series.mat")["tseries"]
 degDist = np.logspace(np.log10(0.1), np.log10(83.04), 54)
 
 isubj = 5

@@ -1,402 +1,362 @@
 import numpy as np
 from scipy import sparse
+from scipy.sparse.csgraph import connected_components
+from numba import njit
 
 
 def EnsureCsr(A):
     """
-    Convert an adjacency matrix to a SciPy CSR matrix with zero diagonal.
+    Copy an adjacency matrix into canonical CSR format with zero diagonal.
 
     Args:
-        A: array-like or scipy.sparse.spmatrix, shape (N, N). Adjacency matrix (dense or any sparse format).
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Binary or nonnegative weighted adjacency; directed inputs are also accepted here.
 
     Returns:
-        A_csr: scipy.sparse.csr_matrix, shape (N, N). CSR adjacency with dtype float, zeroed diagonal, and no explicit zeros.
+        A_csr: scipy.sparse.csr_matrix. Float adjacency with zero diagonal, duplicate entries summed and explicit zeros removed.
 
     Notes:
-        - Intended for undirected (symmetric) graphs; does not enforce symmetry.
-        - Keeps weights; negative weights are not handled elsewhere in this module.
+        - Never modifies the caller's dense or sparse input.
+        - Non-finite or negative off-diagonal weights are rejected; signed modularity requires a separate null model.
     """
     if sparse.issparse(A):
-        A = A.tocsr()
-        A = A.astype(float, copy=False)
-        A.setdiag(0.0)
-        A.eliminate_zeros()
-        return A
-    A = np.asarray(A, dtype=float)
-    np.fill_diagonal(A, 0.0)
-    return sparse.csr_matrix(A)
-
-
-def Modularity(A, labels, gamma=1.0):
-    """
-    Compute Newman–Girvan modularity (undirected) with resolution parameter γ.
-    Q_γ = (1 / 2m) * sum_{ij} [ A_ij - γ * (k_i k_j / 2m) ] * δ(c_i, c_j)
-
-    Args:
-        A: array-like or scipy.sparse.spmatrix, shape (N, N). Symmetric adjacency (binary or weighted). Diagonal is ignored.
-        labels: array-like, shape (N,). Community labels per node.
-        gamma: float, default=1.0. Resolution parameter (γ>1 favors smaller communities; γ<1 merges more).
-
-    Returns:
-        Q: float. Modularity value.
-
-    Notes:
-        - For sparse A, a dense temporary copy is used for the final block sum;
-        for very large N prefer the snapshot scorers below that aggregate by community.
-    """
-    if sparse.issparse(A):
-        k = np.asarray(A.sum(axis=1)).ravel()
+        adjacency = sparse.csr_matrix(A, dtype=float, copy=True)
     else:
-        A = np.asarray(A, dtype=float)
-        k = A.sum(axis=1)
-    m2 = k.sum()  # = 2m
-    if m2 <= 0:
+        dense = np.asarray(A)
+        if dense.ndim != 2 or dense.shape[0] != dense.shape[1]:
+            raise ValueError("A must be a square adjacency matrix.")
+        # CSR owns its data; no dense float copy is needed to protect the input.
+        adjacency = sparse.csr_matrix(dense, dtype=float, copy=True)
+    if adjacency.shape[0] != adjacency.shape[1]:
+        raise ValueError("A must be a square adjacency matrix.")
+    adjacency.sum_duplicates()
+    adjacency.setdiag(0.0)
+    adjacency.eliminate_zeros()
+    adjacency.sort_indices()
+    if not np.isfinite(adjacency.data).all() or np.any(adjacency.data < 0):
+        raise ValueError("Off-diagonal weights must be finite and nonnegative.")
+    return adjacency
+
+
+def _ValidateGamma(gamma):
+    """Validate the nonnegative resolution parameter."""
+    if np.ndim(gamma) != 0 or not np.isfinite(gamma) or gamma < 0:
+        raise ValueError("gamma must be a finite nonnegative scalar.")
+    return float(gamma)
+
+
+def _ValidateUndirected(A):
+    """Reject asymmetric graphs rather than silently treating them as undirected."""
+    difference = A - A.T
+    if difference.nnz:
+        scale = float(np.max(A.data)) if A.nnz else 1.0
+        if np.max(np.abs(difference.data)) > 1e-12 * scale:
+            raise ValueError("Undirected modularity requires symmetric adjacency; use directed=True for scoring.")
+
+
+def _CommunityIds(labels, N):
+    """Validate one label per node and encode arbitrary community identifiers."""
+    labels = np.asarray(labels)
+    if labels.ndim != 1 or labels.size != N:
+        raise ValueError("labels must have shape (N,), with one label per node.")
+    if np.issubdtype(labels.dtype, np.number) and not np.isfinite(labels).all():
+        raise ValueError("Community labels must be finite.")
+    if labels.dtype == object and any(label is None for label in labels):
+        raise ValueError("Community labels cannot be missing.")
+    return np.unique(labels, return_inverse=True)[1].astype(np.int64)
+
+
+@njit(cache=True)
+def _InternalWeight(indptr, indices, data, labels):
+    """Sum within-community CSR weights without an N-by-N temporary matrix."""
+    internal = 0.0
+    for i in range(labels.size):
+        for position in range(indptr[i], indptr[i+1]):
+            if labels[i] == labels[indices[position]]:
+                internal += data[position]
+    return internal
+
+
+def _ModularityCsr(A, labels, gamma, directed=False):
+    """Score canonical CSR; retain self-loops on internal coarse graphs."""
+    ids = _CommunityIds(labels, A.shape[0])
+    degree_out = np.asarray(A.sum(axis=1)).ravel()
+    mass = float(degree_out.sum())
+    if not np.isfinite(mass):
+        raise ValueError("Total edge weight must be finite; rescale excessively large weights.")
+    if mass <= 0:
         return 0.0
-    m = m2 / 2.0
-    labs = np.asarray(labels)
-    same = labs[:, None] == labs[None, :]
-    if sparse.issparse(A):
-        Ad = A.toarray()
-        expected = gamma * np.outer(k, k) / (2.0 * m)
-        return float(((Ad - expected)[same]).sum() / (2.0 * m))
+    out_totals = np.bincount(ids, weights=degree_out) / mass
+    if directed:
+        degree_in = np.asarray(A.sum(axis=0)).ravel()
+        in_totals = np.bincount(ids, weights=degree_in) / mass
     else:
-        expected = gamma * np.outer(k, k) / (2.0 * m)
-        return float(((A - expected)[same]).sum() / (2.0 * m))
+        in_totals = out_totals
+    internal = _InternalWeight(A.indptr, A.indices, A.data, ids)
+    return float(internal / mass - gamma * np.dot(out_totals, in_totals))
 
 
 def CoarseGrain(A, comm, C):
     """
-    Build the coarse (community-level) graph by summing weights between communities.
+    Sum current graph weights between communities into a coarse graph.
 
     Args:
-        A: scipy.sparse.spmatrix (CSR preferred), shape (n, n). Current-level adjacency.
-        comm: array-like, shape (n,). Community id (0..C-1) of each node at current level.
-        C: int. Number of communities at current level.
+        A: scipy.sparse.spmatrix, shape (N, N). Current-level adjacency, including any coarse self-loops.
+        comm: array-like, shape (N,). Integer community identifiers in 0..C-1.
+        C: int. Number of communities.
 
     Returns:
-        A_coarse: scipy.sparse.csr_matrix, shape (C, C). Coarse graph where entry (p, q) is the sum of weights between communities p and q.
+        A_coarse: scipy.sparse.csr_matrix, shape (C, C). Canonical coarse graph, retaining self-loops and total weight.
 
     Notes:
-        - Self-loops on the coarse graph are retained (standard Louvain behavior).
+        - COO coordinates are paired directly with their weights, including explicit-zero or duplicate input entries.
     """
-    A = A.tocsr()
-    rows, cols = A.nonzero()
-    data = A.data
-    cr = comm[rows]
-    cc = comm[cols]
-    M = sparse.coo_matrix((data, (cr, cc)), shape=(C, C))
-    return M.tocsr()
+    adjacency = sparse.coo_matrix(A, dtype=float, copy=True)
+    if adjacency.shape[0] != adjacency.shape[1]:
+        raise ValueError("A must be square.")
+    comm = np.asarray(comm)
+    if isinstance(C, (bool, np.bool_)) or not isinstance(C, (int, np.integer)) or C < 0:
+        raise ValueError("C must be a nonnegative integer.")
+    if comm.shape != (adjacency.shape[0],) or not np.issubdtype(comm.dtype, np.integer):
+        raise ValueError("comm must contain one integer community id per node.")
+    if comm.size and (comm.min() < 0 or comm.max() >= C):
+        raise ValueError("Community ids must lie in 0..C-1.")
+    coarse = sparse.coo_matrix((adjacency.data, (comm[adjacency.row], comm[adjacency.col])), shape=(C, C)).tocsr()
+    coarse.sum_duplicates()
+    coarse.eliminate_zeros()
+    coarse.sort_indices()
+    return coarse
 
 
-def AggregateGroups(groups, comm, C):
+@njit(cache=True)
+def _LouvainMovePass(indptr, indices, data, degree, comm, totals, order, gamma, mass):
+    """Apply only positive modularity-gain moves; coarse loops cancel in gains."""
+    weights = np.zeros(comm.size)
+    touched = np.empty(comm.size, dtype=np.int64)
+    moves = 0
+    for i in order:
+        if degree[i] == 0:
+            continue
+        count = 0
+        for position in range(indptr[i], indptr[i+1]):
+            neighbor = indices[position]
+            if neighbor == i:
+                continue
+            community = comm[neighbor]
+            if weights[community] == 0:
+                touched[count] = community
+                count += 1
+            weights[community] += data[position]
+        current = comm[i]
+        totals[current] -= degree[i]
+        # Compare insertion into a candidate with reinsertion into the current
+        # community. Comparing against zero can miss valid improving moves.
+        best = current
+        best_gain = weights[current] - gamma * degree[i] * (totals[current] / mass)
+        for position in range(count):
+            candidate = touched[position]
+            gain = weights[candidate] - gamma * degree[i] * (totals[candidate] / mass)
+            if gain > best_gain + 1e-14 * mass:
+                best, best_gain = candidate, gain
+        comm[i] = best
+        totals[best] += degree[i]
+        if best != current:
+            moves += 1
+        for position in range(count):
+            weights[touched[position]] = 0.0
+    return moves
+
+
+def _SplitDisconnectedCommunities(A, labels):
+    """Refine disconnected Louvain groups without lowering nonnegative-gamma Q."""
+    rows = np.repeat(np.arange(A.shape[0]), np.diff(A.indptr))
+    within = A.copy()
+    within.data[labels[rows] != labels[within.indices]] = 0
+    within.eliminate_zeros()
+    return connected_components(within, directed=False, return_labels=True)[1]
+
+
+def _RunLouvain(A, gamma, max_passes, max_levels, tol, rng):
+    """One restart, tracking original-node labels without nested node-group lists."""
+    labels = np.arange(A.shape[0], dtype=np.int64)
+    best_labels = labels.copy()
+    best_Q = _ModularityCsr(A, labels, gamma)
+    current = A
+    for _ in range(max_levels):
+        size = current.shape[0]
+        comm = np.arange(size, dtype=np.int64)
+        degree = np.asarray(current.sum(axis=1)).ravel()
+        mass = float(degree.sum())
+        totals = degree.copy()
+        for _ in range(max_passes):
+            moves = _LouvainMovePass(current.indptr, current.indices, current.data,
+                                    degree, comm, totals, rng.permutation(size), gamma, mass)
+            if moves == 0:
+                break
+        _, comm = np.unique(comm, return_inverse=True)
+        candidate = comm[labels]
+        Q = _ModularityCsr(current, comm, gamma)
+        improvement = Q - best_Q
+        if Q >= best_Q:
+            best_labels, best_Q = candidate.copy(), Q
+        communities = int(comm.max()) + 1
+        if communities == size or improvement <= tol:
+            break
+        labels = candidate
+        current = CoarseGrain(current, comm, communities)
+    # A known Louvain limitation is a disconnected returned community. Splitting
+    # it preserves internal edge weight and cannot increase the null-model term.
+    refined = _SplitDisconnectedCommunities(A, best_labels)
+    refined_Q = _ModularityCsr(A, refined, gamma)
+    return refined, refined_Q
+
+
+def DetectCommunitiesLouvain(A, gamma=1.0, max_passes=100, max_levels=10,
+                            tol=1e-7, seed=None, *, n_restarts=1):
     """
-    Merge lists of original-node indices according to new community assignments.
+    Detect undirected weighted communities with sparse multilevel Louvain.
 
     Args:
-        groups: list of 1D np.ndarray. At the current level, each entry contains original-node indices of a super-node.
-        comm: array-like, shape (len(groups),). Community id (0..C-1) assigned to each super-node.
-        C: int. Number of new communities.
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Symmetric binary or nonnegative weighted adjacency; original diagonal ignored.
+        gamma: float, optional (default=1.0). Nonnegative resolution parameter; larger values favor smaller communities.
+        max_passes: int, optional (default=100). Maximum node sweeps at each level.
+        max_levels: int, optional (default=10). Maximum aggregation levels per restart.
+        tol: float, optional (default=1e-7). Minimum modularity improvement to continue to another level.
+        seed: int or None, optional (default=None). Seed controlling node visitation order.
+        n_restarts: int, keyword-only, optional (default=1). Independent visitation sequences; return the highest-Q partition found.
 
     Returns:
-        merged: list of 1D np.ndarray (length C). Each array lists the original-node indices belonging to that community.
-    """
-    merged = [list() for _ in range(C)]
-    for g_idx, c_id in enumerate(comm):
-        merged[c_id].append(groups[g_idx])
-    return [np.concatenate(members) if len(members) > 1 else members[0] for members in merged]
-
-
-def GroupsToLabels(groups, N):
-    """
-    Convert grouped original-node indices to a dense labels vector.
-
-    Args:
-        groups: list of 1D np.ndarray. Each array contains the original-node indices of one community.
-        N: int. Number of original nodes.
-
-    Returns:
-        labels: np.ndarray, shape (N,), dtype=int. Labels 0..C-1 per original node, consistent with `groups`.
-    """
-    labels = np.empty(N, dtype=int)
-    for c_id, idxs in enumerate(groups):
-        labels[idxs] = c_id
-    return labels
-
-def DetectCommunitiesLouvain(A, gamma=1.0, max_passes=100, max_levels=10, tol=1e-7, seed=None):
-    """
-    Louvain community detection (undirected, weighted) with resolution γ.
-    Implements the two-phase Louvain algorithm (Blondel et al., 2008): (1) local greedy node moves that improve modularity; (2) aggregation into a coarse graph; repeat across levels until improvement < tol or max_levels hit.
-
-    Args:
-        A: array-like or scipy.sparse.spmatrix, shape (N, N). Symmetric adjacency (binary or weighted). Diagonal is ignored at the finest level.
-        gamma: float, default=1.0. Modularity resolution parameter.
-        max_passes: int, default=100. Maximum full sweeps of nodes per level during local moving.
-        max_levels: int, default=10. Maximum number of aggregation levels.
-        tol: float, default=1e-7. Minimum modularity gain between levels to continue.
-        seed: int or None, default=None. RNG seed controlling node visitation order.
-
-    Returns:
-        labels: np.ndarray, shape (N,), dtype=int. Community assignment for each original node (0..C-1).
-        Q: float. Modularity (with γ) of the returned partition, computed on the original graph.
+        labels: np.ndarray, shape (N,), dtype=int. Community assignments of original nodes.
+        Q: float. Modularity of the returned partition on the original zero-diagonal graph.
 
     Notes:
-        - Complexity per pass is O(m) where m is the number of edges.
-        - Deterministic behavior requires setting `seed`; different seeds may yield
-        different but typically similar-Q partitions.
+        - Compiled sparse node sweeps avoid Python per-edge dictionaries; coarse self-loops are retained but excluded from move-edge totals.
+        - Disconnected detected communities are split into connected components.
+        - Louvain remains a heuristic with a modularity resolution limit; restarts do not guarantee a global optimum or constitute the Leiden algorithm.
+        - A fixed seed gives reproducible results in this implementation.
+        - Reference: Blondel et al. (2008), https://arxiv.org/abs/0803.0476.
     """
+    gamma = _ValidateGamma(gamma)
+    for name, value in (("max_passes", max_passes), ("max_levels", max_levels), ("n_restarts", n_restarts)):
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < 1:
+            raise ValueError(f"{name} must be a positive integer.")
+    if np.ndim(tol) != 0 or not np.isfinite(tol) or tol < 0:
+        raise ValueError("tol must be a finite nonnegative scalar.")
+    adjacency = EnsureCsr(A)
+    _ValidateUndirected(adjacency)
+    if adjacency.nnz == 0:
+        return np.arange(adjacency.shape[0], dtype=int), 0.0
     rng = np.random.default_rng(seed)
-    A = EnsureCsr(A)
-    N = A.shape[0]
-    if N == 0:
-        return np.array([], dtype=int), 0.0
+    best_labels, best_Q = None, -np.inf
+    for _ in range(n_restarts):
+        labels, Q = _RunLouvain(adjacency, gamma, max_passes, max_levels, tol, rng)
+        if Q > best_Q:
+            best_labels, best_Q = labels, Q
+    return best_labels, float(best_Q)
 
-    A_curr = A.copy()
-    node_groups_per_level = [[np.array([i], dtype=int) for i in range(N)]]
-    prev_Q = -np.inf
-
-    for _level in range(max_levels):
-        n_curr = A_curr.shape[0]
-        comm = np.arange(n_curr, dtype=int)
-
-        k = np.asarray(A_curr.sum(axis=1)).ravel()
-        m2 = k.sum()
-        if m2 <= 0:
-            final_labels = GroupsToLabels(node_groups_per_level[-1], N)
-            return final_labels, 0.0
-        m = m2 / 2.0
-        tot = k.copy()
-
-        indptr, indices, data = A_curr.indptr, A_curr.indices, A_curr.data
-        improved_any, passes = True, 0
-        while improved_any and passes < max_passes:
-            improved_any = False
-            passes += 1
-            order = rng.permutation(n_curr)
-            for i in order:
-                ci = comm[i]
-                start, end = indptr[i], indptr[i+1]
-                neigh = indices[start:end]
-                w = data[start:end]
-                k_i = k[i]
-                if k_i == 0:
-                    continue
-
-                # Aggregate weights to neighboring communities: k_i,in(C)
-                k_to_comm = {}
-                for nb, wij in zip(neigh, w):
-                    cnb = comm[nb]
-                    k_to_comm[cnb] = k_to_comm.get(cnb, 0.0) + wij
-
-                # Temporarily remove i from its community
-                tot[ci] -= k_i
-                comm[i] = -1
-
-                best_c, best_gain = ci, 0.0
-                base_tot_ci = tot[ci]
-
-                for c, k_i_in in k_to_comm.items():
-                    gain = k_i_in - gamma * k_i * (tot[c]) / (2.0 * m)
-                    if gain > best_gain + 1e-14:
-                        best_gain, best_c = gain, c
-
-                # Option to return to original community (robustness)
-                gain_back = k_to_comm.get(ci, 0.0) - gamma * k_i * (base_tot_ci) / (2.0 * m)
-                if gain_back > best_gain + 1e-14:
-                    best_gain, best_c = gain_back, ci
-
-                # Commit
-                if best_c != ci:
-                    comm[i] = best_c
-                    tot[best_c] += k_i
-                    improved_any = True
-                else:
-                    comm[i] = ci
-                    tot[ci] += k_i
-
-        # Relabel consecutive 0..C-1
-        unique_comms, new_ids = np.unique(comm, return_inverse=True)
-        C = unique_comms.size
-        comm = new_ids
-
-        # Stop if no aggregation occurs
-        if C == n_curr:
-            final_groups = AggregateGroups(node_groups_per_level[-1], comm, C)
-            final_labels = GroupsToLabels(final_groups, N)
-            Q = Modularity(A, final_labels, gamma=gamma)
-            return final_labels, Q
-
-        # Aggregate and iterate
-        A_next = CoarseGrain(A_curr, comm, C)
-        current_groups = node_groups_per_level[-1]
-        new_groups = AggregateGroups(current_groups, comm, C)
-        node_groups_per_level.append(new_groups)
-        A_curr = A_next
-
-        # Early stopping by level-wise improvement
-        candidate_labels = GroupsToLabels(new_groups, N)
-        Q = Modularity(A, candidate_labels, gamma=gamma)
-        if Q < prev_Q + tol:
-            return GroupsToLabels(current_groups, N), prev_Q if prev_Q > -np.inf else Q
-        prev_Q = Q
-
-    # Max levels reached
-    final_labels = GroupsToLabels(node_groups_per_level[-1], A.shape[0])
-    Q = Modularity(A, final_labels, gamma=gamma)
-    return final_labels, Q
-
-
-# ---------- Scoring helpers ----------
 
 def SnapshotModularity(A, labels, gamma=1.0, directed=False):
     """
-    Compute modularity of a single snapshot (undirected or directed).
+    Score a supplied snapshot partition using undirected or directed modularity.
 
     Args:
-        A: array-like or scipy.sparse.spmatrix, shape (N, N). Adjacency matrix. For undirected, should be symmetric; diagonal ignored.
-        labels: array-like, shape (N,). Community labels per node.
-        gamma: float, default=1.0. Resolution parameter (undirected or directed variants).
-        directed: bool, default=False. If True, uses directed modularity: Q = (1/m) sum_{ij} [ A_ij - γ (k_i^out k_j^in / m) ] δ(c_i, c_j)
+        A: array-like or scipy.sparse.spmatrix, shape (N, N). Binary or nonnegative weighted adjacency; diagonal ignored in both modes.
+        labels: array-like, shape (N,). Community identifiers per node.
+        gamma: float, optional (default=1.0). Finite nonnegative resolution parameter.
+        directed: bool, optional (default=False). Use out-strength times in-strength in the null model instead of the undirected strength product.
 
     Returns:
-        Q: float. Modularity of the partition on this snapshot.
+        Q: float. Snapshot modularity; zero for an edgeless graph.
+
+    Notes:
+        - Does not modify inputs or densify sparse graphs.
+        - Negative weights need signed modularity and are rejected, not silently discarded.
     """
-    A = A if sparse.issparse(A) else np.asarray(A, dtype=float)
-    labs = np.asarray(labels)
-    if sparse.issparse(A):
-        if not directed:
-            A = A.tocsr(copy=True)
-            A.setdiag(0.0); A.eliminate_zeros()
-            k = np.asarray(A.sum(axis=1)).ravel()
-            m = k.sum()/2.0
-            if m <= 0: return 0.0
-            Q = 0.0
-            _, inv, counts = np.unique(labs, return_inverse=True, return_counts=True)
-            for c in range(counts.size):
-                idx = np.where(inv == c)[0]
-                if idx.size == 0: continue
-                Asub = A[idx][:, idx]
-                ksub = k[idx]
-                e_c = Asub.sum()
-                a_c = gamma * (ksub.sum()**2) / (2.0*m)
-                Q += (e_c - a_c)
-            return float(Q/(2.0*m))
-        else:
-            A = A.tocsr(copy=False)
-            kout = np.asarray(A.sum(axis=1)).ravel()
-            kin  = np.asarray(A.sum(axis=0)).ravel()
-            m = A.sum()
-            if m <= 0: return 0.0
-            Q = 0.0
-            _, inv, counts = np.unique(labs, return_inverse=True, return_counts=True)
-            for c in range(counts.size):
-                idx = np.where(inv == c)[0]
-                Asub = A[idx][:, idx]
-                e_c = Asub.sum()
-                a_c = gamma * (kout[idx].sum()*kin[idx].sum())/m
-                Q += (e_c - a_c)
-            return float(Q/m)
-    else:
-        if not directed:
-            A = A.astype(float, copy=True)
-            np.fill_diagonal(A, 0.0)
-            k = A.sum(axis=1)
-            m = k.sum()/2.0
-            if m <= 0: return 0.0
-            same = (labs[:, None] == labs[None, :])
-            expected = gamma * np.outer(k, k) / (2.0*m)
-            return float(((A - expected)[same]).sum()/(2.0*m))
-        else:
-            kout = A.sum(axis=1)
-            kin  = A.sum(axis=0)
-            m = A.sum()
-            if m <= 0: return 0.0
-            same = (labs[:, None] == labs[None, :])
-            expected = gamma * np.outer(kout, kin) / m
-            return float(((A - expected)[same]).sum()/m)
+    gamma = _ValidateGamma(gamma)
+    adjacency = EnsureCsr(A)
+    if not directed:
+        _ValidateUndirected(adjacency)
+    return _ModularityCsr(adjacency, labels, gamma, directed)
 
-
-# ---------- Public APIs (PascalCase) ----------
 
 def ComputeSnapshotModularity(adj_matrix, labels=None, *, gamma=1.0,
                               directed=False, detect_method='louvain',
                               detect_kwargs=None):
     """
-    Compute modularity for a single snapshot; auto-detect communities if needed.
+    Score a snapshot partition, optionally detecting communities first.
 
     Args:
-        adj_matrix: array-like or scipy.sparse.spmatrix, shape (N, N). Adjacency of the snapshot. Symmetric for undirected. Weights allowed.
-        labels: None or array-like, shape (N,), default=None. If provided, these labels are scored. If None, communities are detected using Louvain (undirected only) with the given `gamma`.
-        gamma: float, default=1.0. Modularity resolution parameter.
-        directed: bool, default=False. If True, uses directed modularity scoring (no auto-detect; pass labels).
-        detect_method: {'louvain'}, default='louvain'. Detection algorithm when `labels` is None.
-        detect_kwargs: dict or None, default=None. Extra keyword arguments forwarded to the detector (e.g., {'seed': 42}).
+        adj_matrix: array-like or scipy.sparse.spmatrix, shape (N, N). Binary or nonnegative weighted adjacency; diagonal ignored.
+        labels: None or array-like, shape (N,), optional (default=None). Supplied partition or automatic undirected detection.
+        gamma: float, optional (default=1.0). Nonnegative modularity resolution parameter.
+        directed: bool, optional (default=False). Directed scoring requires supplied labels.
+        detect_method: {"louvain"}, optional (default="louvain"). Automatic community detection method.
+        detect_kwargs: dict or None, optional (default=None). Detector options such as seed, max_passes or n_restarts.
 
     Returns:
-        Q: float. Modularity value for this snapshot.
-        used_labels: np.ndarray, shape (N,). Labels that were scored (provided or auto-detected).
+        Q: float. Snapshot modularity.
+        used_labels: np.ndarray, shape (N,). Detected integer labels or an unmodified copy of supplied identifiers.
     """
     if labels is None:
         if directed:
-            raise NotImplementedError("Auto-detection for directed graphs not implemented; provide labels.")
+            raise NotImplementedError("Directed detection is not implemented; provide labels.")
         if detect_method != 'louvain':
-            raise ValueError("Only 'louvain' is supported in this helper.")
-        detect_kwargs = detect_kwargs or {}
-        labs, _Q = DetectCommunitiesLouvain(adj_matrix, gamma=gamma, **detect_kwargs)
-        Q = SnapshotModularity(adj_matrix, labs, gamma=gamma, directed=False)
-        return float(Q), labs.astype(int)
-    else:
-        labs = np.asarray(labels, dtype=int)
-        Q = SnapshotModularity(adj_matrix, labs, gamma=gamma, directed=directed)
-        return float(Q), labs
+            raise ValueError("Only 'louvain' detection is supported.")
+        used, Q = DetectCommunitiesLouvain(adj_matrix, gamma=gamma, **(detect_kwargs or {}))
+        return Q, used
+    used = np.array(labels, copy=True)
+    return SnapshotModularity(adj_matrix, used, gamma, directed), used
 
 
 def ComputeTemporalModularity(adjacency_matrices, labels_per_snapshot=None, *,
                               gamma=1.0, directed=False, detect_method='louvain',
                               detect_kwargs=None):
     """
-    Compute mean modularity across time; score provided labels or auto-detect per snapshot.
+    Compute the arithmetic mean of independent snapshot modularities.
 
     Args:
-        adjacency_matrices: np.ndarray or list, shape (T, N, N) or list of (N, N). Sequence of T snapshots (binary or weighted). Symmetric for undirected.
-        labels_per_snapshot: None, (N,), or (T, N), default=None. - None: auto-detect (Louvain) labels independently at each snapshot (undirected only). - (N,): a single static partition reused for all T snapshots. - (T, N): per-snapshot labels supplied by the caller.
-        gamma: float, default=1.0. Modularity resolution parameter.
-        directed: bool, default=False. If True, uses directed modularity scoring (no auto-detect).
-        detect_method: {'louvain'}, default='louvain'. Detection algorithm when labels are not supplied (undirected only).
-        detect_kwargs: dict or None, default=None. Extra keyword arguments forwarded to the detector (e.g., {'seed': 42}).
+        adjacency_matrices: np.ndarray or list, shape (T, N, N) or list of (N, N). Binary or nonnegative weighted snapshots, dense or sparse.
+        labels_per_snapshot: None, (N,), or (T, N), optional (default=None). Detect independently per frame, reuse one supplied partition, or score frame-specific partitions.
+        gamma: float, optional (default=1.0). Nonnegative modularity resolution parameter.
+        directed: bool, optional (default=False). Directed scoring requires supplied partitions.
+        detect_method: {"louvain"}, optional (default="louvain"). Automatic detection method.
+        detect_kwargs: dict or None, optional (default=None). Detector options, e.g. {"seed": 42, "n_restarts": 5}.
 
     Returns:
-        avg_Q: float. Mean modularity over snapshots.
-        Qs: np.ndarray, shape (T,). Per-snapshot modularity values.
-        out_labels_per_snapshot: np.ndarray, shape (T, N). Labels used/scored at each snapshot (detected or provided).
+        avg_Q: float. Mean snapshot modularity; NaN for an empty sequence.
+        Qs: np.ndarray, shape (T,). Snapshot modularity values.
+        out_labels_per_snapshot: np.ndarray, shape (T, N). Detected or supplied labels used for each snapshot.
 
     Notes:
-        - For a persistence-aware objective (ω coupling across time), use a multilayer
-        optimizer/scorer instead of averaging snapshot modularities.
+        - This is not multilayer modularity: there is no inter-frame coupling or community-identity matching across snapshots.
+        - Edgeless frames contribute zero to the mean. Detection and scoring share one path, avoiding redundant per-frame scoring.
+        - The same explicitly supplied seed is forwarded to each snapshot for reproducibility.
     """
-    mats = adjacency_matrices
-    if isinstance(mats, np.ndarray) and mats.ndim == 3 and not sparse.issparse(mats):
-        mats_list = [mats[t] for t in range(mats.shape[0])]
+    gamma = _ValidateGamma(gamma)
+    if isinstance(adjacency_matrices, np.ndarray):
+        if adjacency_matrices.ndim != 3 or adjacency_matrices.shape[1] != adjacency_matrices.shape[2]:
+            raise ValueError("adjacency_matrices must have shape (T, N, N).")
+        matrices = adjacency_matrices
+        N = matrices.shape[1]
     else:
-        mats_list = list(mats)
-    T = len(mats_list)
-    detect_kwargs = detect_kwargs or {}
-
-    if labels_per_snapshot is None:
+        matrices = list(adjacency_matrices)
+        N = matrices[0].shape[0] if matrices else 0
+        if any(matrix.shape != (N,N) for matrix in matrices):
+            raise ValueError("All snapshots must have the same square shape.")
+    T = len(matrices)
+    provided = None if labels_per_snapshot is None else np.asarray(labels_per_snapshot)
+    if provided is not None:
+        if provided.shape == (N,):
+            _CommunityIds(provided,N)
+        elif provided.shape != (T,N):
+            raise ValueError("labels_per_snapshot must have shape (N,) or (T, N).")
+    if provided is None and (directed or detect_method != 'louvain'):
         if directed:
-            raise NotImplementedError("Auto-detection not implemented for directed graphs; provide labels_per_snapshot.")
-        L = []
-        for t in range(T):
-            labs, _ = DetectCommunitiesLouvain(mats_list[t], gamma=gamma, **detect_kwargs)
-            L.append(labs.astype(int))
-        L = np.vstack(L)  # (T, N)
-    else:
-        L = np.asarray(labels_per_snapshot)
-        if L.ndim == 1:
-            L = np.repeat(L[None, :], T, axis=0)
-        elif L.ndim != 2 or L.shape[0] != T:
-            raise ValueError("labels_per_snapshot must be None, (N,), or (T,N).")
-
+            raise NotImplementedError("Directed detection is not implemented; provide labels_per_snapshot.")
+        raise ValueError("Only 'louvain' detection is supported.")
     Qs = np.empty(T, dtype=float)
+    labels = np.empty((T,N),dtype=int if provided is None else provided.dtype)
     for t in range(T):
-        Qs[t] = SnapshotModularity(mats_list[t], L[t], gamma=gamma, directed=directed)
-    return float(Qs.mean()), Qs, L
+        current_labels = None if provided is None else provided if provided.ndim == 1 else provided[t]
+        Qs[t], labels[t] = ComputeSnapshotModularity(matrices[t], current_labels,
+            gamma=gamma, directed=directed, detect_method=detect_method, detect_kwargs=detect_kwargs)
+    return float(Qs.mean()) if T else np.nan, Qs, labels

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Output layouts and summaries &#8212; tnet_analysis 1.0.2 User Guide</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=12dfc556" />
+    <script src="_static/documentation_options.js?v=1ed6394b"></script>
+    <script src="_static/doctools.js?v=9a2dae69"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Parallel computation and troubleshooting" href="performance.html" />
+    <link rel="prev" title="Choosing and interpreting measures" href="measures.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="output-layouts-and-summaries">
+<h1>Output layouts and summaries<a class="headerlink" href="#output-layouts-and-summaries" title="Link to this heading">¶</a></h1>
+<section id="distance-matrices">
+<h2>Distance matrices<a class="headerlink" href="#distance-matrices" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">SmartWalker</span></code> returns an (N,N) matrix: NaN on the diagonal, infinity for
+unreachable pairs, and finite arrival times elsewhere.</p>
+<p><code class="docutils literal notranslate"><span class="pre">RandomWalker</span></code> returns (matrix, trial-averaged metrics), or additionally
+an (trials,N,N) tensor when <code class="docutils literal notranslate"><span class="pre">return_fpt_matrix=True</span></code>. Its matrix averages
+only successful first passages; a pair is infinite if no trial reaches it.
+The metrics summarize each trial first, then average trials. They need not
+equal a summary recomputed from the returned mean matrix.
+Likewise, a drunk median entry is the average of trial-specific medians,
+not the median of pooled first-passage observations.</p>
+</section>
+<section id="distance-vectors">
+<h2>Distance vectors<a class="headerlink" href="#distance-vectors" title="Link to this heading">¶</a></h2>
+<p>Smart/drunk measure functions default to <code class="docutils literal notranslate"><span class="pre">summary_stat=&quot;mean&quot;</span></code>:</p>
+<ol class="arabic simple">
+<li><p>impermeability</p></li>
+<li><p>latency</p></li>
+<li><p>resistance</p></li>
+<li><p>inaccessibility</p></li>
+<li><p>irrigation</p></li>
+</ol>
+<p>With <code class="docutils literal notranslate"><span class="pre">&quot;both&quot;</span></code>, the eight entries are:</p>
+<ol class="arabic simple">
+<li><p>impermeability mean</p></li>
+<li><p>impermeability median</p></li>
+<li><p>latency mean</p></li>
+<li><p>latency median</p></li>
+<li><p>resistance mean</p></li>
+<li><p>resistance median</p></li>
+<li><p>inaccessibility</p></li>
+<li><p>irrigation</p></li>
+</ol>
+<p>Counts occur once. Drunk counts can be fractional because they average trials.
+The impermeability median uses finite source-normalized pair entries.
+Do not interpret every median as a median over nodes.</p>
+</section>
+<section id="dynamism-order">
+<h2>Dynamism order<a class="headerlink" href="#dynamism-order" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ComputeDynamism</span></code> returns transition probability, global entropy,
+cosine similarity, net fluidity, mutual information and mean edge count.
+These are six scalars, not six node-score distributions.</p>
+</section>
+<section id="node-score-summaries">
+<h2>Node-score summaries<a class="headerlink" href="#node-score-summaries" title="Link to this heading">¶</a></h2>
+<p>For functions supporting all summary options:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">None</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;percentiles&quot;</span></code>: [p05,p25,p50,p75,p95].</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;mean&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;median&quot;</span></code>: one scalar.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;both&quot;</span></code>: [mean,median].</p></li>
+</ul>
+<p>Here the median of node scores is not necessarily the median of all
+underlying frames or events. Return latency summarizes nodewise mean
+latencies. Node persistence adds its exceedance count to the summary.
+Return latency returns (summary,mean successful-return count), unless
+nodewise details are requested. Burstiness returns a matrix, not this
+summary schema. Modularity and participation have their own outputs;
+consult the API rather than assuming one universal shape.</p>
+</section>
+<section id="nan-infinity-and-padding">
+<h2>NaN, infinity and padding<a class="headerlink" href="#nan-infinity-and-padding" title="Link to this heading">¶</a></h2>
+<p>NaN often represents an undefined score or excluded diagonal. Infinity in
+distance matrices represents non-arrival within the horizon. Zero is a
+valid measure value, not universally missing data.</p>
+<p>Use NaN-aware population summaries only after recording missing-data counts.
+Do not silently turn infinity into zero. Resistance already handles
+non-arrivals via its explicit penalty.</p>
+<p>The example <code class="docutils literal notranslate"><span class="pre">funcIntSeg</span></code> wrapper has seven metric groups and pads every
+vector to width eight. Their meaningful widths are [8,8,6,2,2,3,2].
+Padding zeros are not observations. Use <code class="docutils literal notranslate"><span class="pre">METRIC_SPECS</span></code> output names to
+identify meaningful entries, and preserve those names with saved arrays.
+Package functions themselves do not add wrapper padding.</p>
+<p>Save node order, subject IDs, achieved degrees, tags, FC method, time
+settings, seeds, units and trial counts alongside results.</p>
+</section>
+<section id="aliases">
+<h2>Aliases<a class="headerlink" href="#aliases" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ComputeReturnability</span></code> aliases <code class="docutils literal notranslate"><span class="pre">ComputeRetention</span></code>;
+<code class="docutils literal notranslate"><span class="pre">ComputeCirculationLatency</span></code> aliases <code class="docutils literal notranslate"><span class="pre">ComputeReturnLatency</span></code>;
+<code class="docutils literal notranslate"><span class="pre">ComputeStaticClustering</span></code> aliases <code class="docutils literal notranslate"><span class="pre">ComputeSpatialClustering</span></code>;
+<code class="docutils literal notranslate"><span class="pre">LinkBurstiness</span></code> aliases <code class="docutils literal notranslate"><span class="pre">ComputeLinkBurstiness</span></code>.
+Each pair refers to the same implementation. The canonical names are used
+throughout the guide.</p>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Temporal Network Analysis Toolkit</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Installation and first analysis</a></li>
+<li class="toctree-l1"><a class="reference internal" href="data_and_parameters.html">Inputs and time parameters</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflows.html">Signals, FC and null models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="measures.html">Choosing and interpreting measures</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Output layouts and summaries</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#distance-matrices">Distance matrices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#distance-vectors">Distance vectors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#dynamism-order">Dynamism order</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#node-score-summaries">Node-score summaries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#nan-infinity-and-padding">NaN, infinity and padding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#aliases">Aliases</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Parallel computation and troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+</ul>
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2026, tnet_analysis contributors.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 7.4.7</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/outputs.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

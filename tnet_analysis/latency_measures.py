@@ -1,21 +1,7 @@
 import numpy as np
 import warnings
 from numba import njit
-
-
-def _summarize_scores(values, summary_stat=None):
-    """Summarize node scores with percentiles or a requested statistic."""
-    if summary_stat is None or summary_stat == "percentiles":
-        return np.nanpercentile(values, [5, 25, 50, 75, 95]).tolist()
-    if summary_stat == "both":
-        return [float(np.nanmean(values)), float(np.nanmedian(values))]
-    if summary_stat == "median":
-        return float(np.nanmedian(values))
-    if summary_stat == "mean":
-        return float(np.nanmean(values))
-    raise ValueError(
-        "summary_stat must be None, 'percentiles', 'mean', 'median', or 'both'."
-    )
+from ._summary import SummarizeScores as _summarize_scores
 
 
 def SetDiagonals(tensor, value=1):
@@ -47,30 +33,31 @@ def ComputeAverageDegree(adj_tensor, threshold=None):
 
     Args:
         adj_tensor: np.ndarray, shape (T, N, N). Temporal adjacency (binary or weighted). Assumed symmetric per snapshot.
-        threshold: float or None, optional (default=None). If provided, binarize as (A > threshold). If None, use the input as-is (cast to int).
+        threshold: float or None, optional (default=None). If provided, an edge is A > threshold. If None, every nonzero entry is an edge.
 
     Returns:
         mean_deg: float. Mean degree averaged over all nodes and time snapshots.
         std_deg: float. Standard deviation of degrees over all nodes and time snapshots.
 
     Notes:
-        - Diagonals are set to 0 before degree computation.
-        - Degree per snapshot is computed as row-sums of the binarized adjacency.
+        - Diagonals are ignored without modifying the caller's array.
+        - Degree counts edges, not weighted strength. Directed inputs count outgoing edges.
+        - Process one frame at a time; no full copied/binarized temporal tensor.
     """
-    A = adj_tensor.copy()
-    if threshold is None:
-        binarized = (A != 0).astype(int)
-    else:
-        binarized = (A > threshold).astype(int)
-
-    T, n_nodes, _ = binarized.shape
-    idx = np.arange(n_nodes)
-    binarized[:, idx, idx] = 0
-
-    degrees = binarized.sum(axis=2)
-    mean_deg = degrees.mean()
-    std_deg = degrees.std()
-    return mean_deg, std_deg
+    A = np.asarray(adj_tensor)
+    if A.ndim != 3 or A.shape[1] != A.shape[2] or A.shape[1] == 0:
+        raise ValueError("adj_tensor must have shape (T, N, N), with N > 0.")
+    if threshold is not None and (np.ndim(threshold) != 0 or not np.isfinite(threshold)):
+        raise ValueError("threshold must be a finite scalar or None.")
+    degrees = np.empty(A.shape[:2], dtype=np.int64)
+    for t, frame in enumerate(A):
+        if not np.isfinite(frame).all():
+            raise ValueError("Adjacency must be finite.")
+        present = frame != 0 if threshold is None else frame > threshold
+        degrees[t] = np.count_nonzero(present, axis=1) - np.diag(present)
+    if not degrees.size:
+        return np.nan, np.nan
+    return float(degrees.mean()), float(degrees.std())
 
 
 def _ValidateMultiHopInputs(tnet, hops_per_frame, latency_unit="frames"):
@@ -109,26 +96,88 @@ def _DefaultMultiHopPenalty(n_frames, hops_per_frame, latency_unit):
     return float(n_frames + 1)
 
 
-def _SmartWalkerSubsteps(network, hops_per_frame):
-    """Record the first propagation substep at which each target is reached."""
-    n_nodes = network.shape[1]
-    reach = np.eye(n_nodes, dtype=bool)
-    arrival = np.full((n_nodes, n_nodes), np.inf)
-    np.fill_diagonal(arrival, 0)
+# Shared packing for SmartWalker and one-hop return.
+@njit(cache=True)
+def _PackTemporalNeighbors(network):
+    """Store binary neighbor sets as 64-bit words for temporal path searches."""
+    n_frames, n_nodes, _ = network.shape
+    n_words = (n_nodes + 63) // 64
+    packed = np.zeros((n_frames, n_nodes, n_words), dtype=np.uint64)
+    for t in range(n_frames):
+        for source in range(n_nodes):
+            for target in range(n_nodes):
+                if network[t, source, target]:
+                    packed[t, source, target // 64] |= np.uint64(1) << np.uint64(target % 64)
+    return packed
+
+
+@njit(cache=True)
+def _SmartWalkerFirstArrivals(packed, n_nodes, hops_per_frame):
+    """Propagate one frozen reachable set per substep, stopping completed rows."""
+    n_frames, _, n_words = packed.shape
+    reach = np.zeros((n_nodes, n_words), dtype=np.uint64)
+    counts = np.ones(n_nodes, dtype=np.int64)
+    arrivals = np.full((n_nodes, n_nodes), np.inf)
+    for source in range(n_nodes):
+        reach[source, source // 64] = np.uint64(1) << np.uint64(source % 64)
+        arrivals[source, source] = np.nan
+    unfinished = 0
+    for source in range(n_nodes):
+        active = False
+        source_word = source // 64
+        source_bit = np.uint64(1) << np.uint64(source % 64)
+        for t in range(n_frames):
+            for word in range(n_words):
+                neighbors = packed[t, source, word]
+                if word == source_word:
+                    neighbors &= ~source_bit
+                if neighbors:
+                    active = True
+                    break
+            if active:
+                break
+        if active:
+            unfinished += 1
+        else:
+            # A source that can only wait never reaches another node.
+            counts[source] = n_nodes
+    if unfinished == 0:
+        return arrivals
+
     substep = 0
-    for frame in network:
+    for t in range(n_frames):
         for _ in range(hops_per_frame):
             substep += 1
-            reach = (reach.astype(np.int16) @ frame) > 0
-            arrival[reach & np.isinf(arrival)] = substep
-    np.fill_diagonal(arrival, np.nan)
-    return arrival
+            for source in range(n_nodes):
+                if counts[source] == n_nodes:
+                    continue
+                # Read only the previous set: newly reached nodes cannot
+                # propagate again until the next permitted substep.
+                next_row = reach[source].copy()
+                for node in range(n_nodes):
+                    bit = np.uint64(1) << np.uint64(node % 64)
+                    if reach[source, node // 64] & bit:
+                        for word in range(n_words):
+                            next_row[word] |= packed[t, node, word]
+                for target in range(n_nodes):
+                    word = target // 64
+                    bit = np.uint64(1) << np.uint64(target % 64)
+                    if (next_row[word] & bit) and not (reach[source, word] & bit):
+                        arrivals[source, target] = substep
+                        counts[source] += 1
+                reach[source] = next_row
+                if counts[source] == n_nodes:
+                    unfinished -= 1
+            if unfinished == 0:
+                return arrivals
+    return arrivals
 
 
 def SmartWalker(tnet, hops_per_frame=1, latency_unit="frames"):
     """
     Compute earliest-arrival temporal distances using a 'smart walker'.
-    The algorithm aggregates temporal reachability cumulatively across time.
+    Propagate bit-packed reachability, recording first arrivals and stopping
+    finished sources. Waiting makes previously reached targets stay reachable.
 
     Args:
         tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), assumed symmetric per snapshot. Diagonals are forced to 1 internally (self-reachability).
@@ -139,27 +188,9 @@ def SmartWalker(tnet, hops_per_frame=1, latency_unit="frames"):
         dmtx: np.ndarray, shape (N, N). Earliest arrival from i to j in the requested unit; np.nan on diagonal and np.inf for unreachable pairs.
     """
     network = _ValidateMultiHopInputs(tnet, hops_per_frame, latency_unit)
-    if hops_per_frame > 1 or latency_unit != "frames":
-        arrival = _SmartWalkerSubsteps(network, hops_per_frame)
-        return _ConvertSubstepDistances(arrival, hops_per_frame, latency_unit)
-
-    tnet_copy = tnet.copy()
-    np.einsum('tii->ti', tnet_copy)[:] = 1
-
-    n = tnet_copy.shape[1]
-    dmtx = np.full((n, n), np.inf)
-    np.fill_diagonal(dmtx, 0)
-
-    reach = np.eye(n, dtype=int)
-    for t, net in enumerate(tnet_copy):
-        reach = (reach @ net > 0).astype(int)
-        cprod = reach.copy()
-        np.fill_diagonal(cprod, 0)
-        time_layer = np.where(cprod > 0, t + 1, np.inf)
-        dmtx = np.minimum(dmtx, time_layer)
-
-    np.fill_diagonal(dmtx, np.nan)
-    return dmtx
+    packed = _PackTemporalNeighbors(network)
+    arrivals = _SmartWalkerFirstArrivals(packed, network.shape[1], hops_per_frame)
+    return _ConvertSubstepDistances(arrivals, hops_per_frame, latency_unit)
 
 
 # Compiled kernels used only by RandomWalker.
@@ -222,7 +253,7 @@ def RandomWalker(tnet, n_trials, return_fpt_matrix=False, seed=None,
         n_trials: int. Number of Monte Carlo trials.
         return_fpt_matrix: bool, optional (default=False). If True, also return the per-trial FPT tensors.
         seed: int or None, optional (default=None). Seed for reproducibility.
-        summary_stat: {"mean", "both"}, optional (default="mean"). Return five legacy values or three adjacent mean/median pairs followed by two counts.
+        summary_stat: {"mean", "both"}, optional (default="mean"). Return five values or three adjacent mean/median pairs followed by two counts.
         hops_per_frame: int, optional (default=1). Maximum random-walk steps within each frame.
         latency_unit: {"frames", "frame_fraction", "substeps"}, optional (default="frames"). Unit of finite distances.
         penalty: float or None, optional (default=None). Unreachable-pair replacement; defaults to one frame beyond the horizon in the requested unit.
@@ -294,7 +325,7 @@ def MeanLatencyMatrixAnalysis(dmx, penalty, summary_stat="mean"):
         summary_stat: {"mean", "both"}, optional (default="mean"). For "both", interleave mean and median for the first three measures, then return each count once.
 
     Returns:
-        stats: list[float]. Five legacy values by default, or eight values for "both".
+        stats: list[float]. Five values by default, or eight values for "both".
     """
     dmx = dmx.copy()
     np.fill_diagonal(dmx, np.nan)
@@ -342,13 +373,13 @@ def ComputeSmartTemporalDistanceMeasures(tnet, random_seed=None, summary_stat="m
     Args:
         tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), symmetric per snapshot.
         random_seed: int or None, optional (default=None). Seed for reproducibility (used by RandomWalker).
-        summary_stat: {"mean", "both"}, optional (default="mean"). Select the five-value legacy or eight-value mixed schema.
+        summary_stat: {"mean", "both"}, optional (default="mean"). Select the five-value or eight-value mixed schema.
         hops_per_frame: int, optional (default=1). Maximum propagation steps within each frame.
         latency_unit: {"frames", "frame_fraction", "substeps"}, optional (default="frames"). Unit of finite distances.
         penalty: float or None, optional (default=None). Unreachable-pair replacement in the requested unit.
 
     Returns:
-        metrics: list. Five legacy values by default, or three mean/median pairs followed by two counts.
+        metrics: list. Five values by default, or three mean/median pairs followed by two counts.
     """
     T = tnet.shape[0]
     if penalty is None:
@@ -373,13 +404,13 @@ def ComputeDrunkTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None,
         tnet: np.ndarray, shape (T, N, N). Temporal adjacency (binary), symmetric per snapshot.
         n_reps: int, optional (default=100). Number of random-walk trials for the Monte Carlo estimator.
         random_seed: int or None, optional (default=None). Seed for reproducibility (used by RandomWalker).
-        summary_stat: {"mean", "both"}, optional (default="mean"). Select the five-value legacy or eight-value mixed schema.
+        summary_stat: {"mean", "both"}, optional (default="mean"). Select the five-value or eight-value mixed schema.
         hops_per_frame: int, optional (default=1). Maximum random-walk steps within each frame.
         latency_unit: {"frames", "frame_fraction", "substeps"}, optional (default="frames"). Unit of finite distances.
         penalty: float or None, optional (default=None). Unreachable-pair replacement in the requested unit.
 
     Returns:
-        metrics: list. Five legacy values by default, or eight values averaged across random-walk trials.
+        metrics: list. Five values by default, or eight values averaged across random-walk trials.
     """
     drunk_latency_matrix, drunk_metrics = RandomWalker(
         tnet, n_reps, seed=random_seed, summary_stat=summary_stat,
@@ -389,193 +420,7 @@ def ComputeDrunkTemporalDistanceMeasures(tnet, n_reps=100, random_seed=None,
     return drunk_metrics
 
 
-def ComputeCirculationLatencyAndRate(
-    adjacency_matrices,
-    max_latency=None,
-    return_full=False,
-    summary_stat="median",
-    hops_per_frame=1,
-    latency_unit="frames",
-):
-    """
-    Compute circulation latency and rate in one pass for a temporal network.
-    For each start time τ and node i: • A start is *eligible* if deg_i(A_τ) > 1 (i.e., at least one neighbor besides self). • We allow waiting (self-loops) in every snapshot by forcing diag=1. • We detect the first time a walk that starts at i returns to i by tracking diagonal increases in cumulative products: P_τ,0 = A_τ; P_τ,ℓ = P_τ,ℓ-1 @ A_{τ+ℓ}. • When a new diagonal hit occurs for i at step ℓ, we record a latency of ℓ+1 (keeps your original convention), and count a hit for rate.
-    The function trims to *active* nodes (any off-diagonal activity across time) for efficiency, then pads results conceptually via index mapping (active_nodes).
-
-    Args:
-        adjacency_matrices: np.ndarray, shape (T, N, N). Temporal adjacency (binary or weighted). Treated as binary for products. Symmetry is assumed but not required.
-        max_latency: int or None, optional (default=None). Maximum steps searched for a return after τ. If None, uses T. Also capped by remaining horizon T-τ.
-        return_full: bool, optional (default=False). If True, return detailed per-node arrays in addition to global summaries.
-        summary_stat: {"median", "mean"}, optional (default="median"). Scalar reduction for nodewise latency.
-        hops_per_frame: int, optional (default=1). Maximum propagation steps within each frame.
-        latency_unit: {"frames", "frame_fraction", "substeps"}, optional (default="frames"). Unit of return latency.
-
-    Returns:
-        If `return_full` is False, a summary dict including median nodewise latency and rate statistics. If `return_full` is True, the same summaries plus nodewise detail arrays.
-
-    Notes:
-        • Diagonals are forced to 1 across all snapshots (waiting allowed). • Eligibility uses the start snapshot only (deg > 1). • Complexity ~ O(T · M^3) in dense worst-case (M = active nodes), typically less due to early exits once all eligible nodes have hit for a given τ.
-    """
-    _ValidateMultiHopInputs(adjacency_matrices, hops_per_frame, latency_unit)
-    if hops_per_frame > 1:
-        details = ComputeCirculationLatency(
-            adjacency_matrices, max_latency=max_latency, return_full=True,
-            summary_stat=summary_stat, hops_per_frame=hops_per_frame,
-            latency_unit=latency_unit,
-        )
-        network = _ValidateMultiHopInputs(adjacency_matrices, hops_per_frame, latency_unit)
-        active = details['active_nodes']
-        eligible = (network[:, active][:, :, active].sum(axis=2) > 1).sum(axis=0)
-        hits = details['hit_count']
-        nodewise_rate = np.full(active.size, np.nan)
-        np.divide(hits, eligible, out=nodewise_rate, where=eligible > 0)
-        total_eligible = int(eligible.sum())
-        result = {
-            'latency_median': details['global_median_latency'],
-            'latency_summary': float(details['global_summary_latency']),
-            'summary_stat': summary_stat,
-            'latency_mean': details['global_mean_latency'],
-            'latency_std': details['global_std_latency'],
-            'rate_nodewise_mean': float(np.nanmean(nodewise_rate)),
-            'rate_overall': float(hits.sum() / total_eligible) if total_eligible else np.nan,
-            'mean_hits_per_node': float(hits.mean()),
-        }
-        if return_full:
-            result.update({
-                'active_nodes': active,
-                'nodewise_mean_latency': details['nodewise_mean_latency'],
-                'nodewise_min_latency': details['min_latency'],
-                'nodewise_hits': hits,
-                'nodewise_eligible': eligible,
-                'nodewise_rate': nodewise_rate,
-                'hops_per_frame': int(hops_per_frame),
-                'latency_unit': latency_unit,
-            })
-        return result
-
-    if adjacency_matrices.ndim != 3:
-        raise ValueError("adjacency_matrices must be (T, N, N).")
-
-    T, N, _ = adjacency_matrices.shape
-    if max_latency is None:
-        max_latency = T
-    else:
-        max_latency = int(max_latency)
-        if max_latency <= 0:
-            raise ValueError("max_latency must be a positive integer.")
-
-    # Identify active nodes: any off-diagonal activity over time
-    aggregated = adjacency_matrices.sum(axis=0).copy()
-    np.fill_diagonal(aggregated, 0)
-    node_activity = aggregated.sum(axis=0) + aggregated.sum(axis=1)
-    active_nodes = np.where(node_activity > 0)[0]
-    M = len(active_nodes)
-    if M == 0:
-        raise ValueError("No active nodes in the temporal network.")
-
-    # Trim to active; binarize; force diag=1 (waiting)
-    adj = (adjacency_matrices[:, active_nodes][:, :, active_nodes] > 0).astype(np.int64)
-    np.einsum('tii->ti', adj)[:] = 1
-
-    # Per-node accumulators
-    # Latency stats
-    min_latency   = np.full(M, np.inf, dtype=float)  # shortest observed latency per node
-    sum_latency   = np.zeros(M, dtype=float)         # sum of first-return latencies
-    count_hits    = np.zeros(M, dtype=np.int64)      # number of (τ,i) starts with a return
-
-    # Rate stats
-    eligible      = np.zeros(M, dtype=np.int64)      # number of eligible starts per node
-
-    # Sweep start times
-    for start_time in range(T - 1):
-        A0 = adj[start_time]
-
-        # Eligible nodes at τ: deg > 1 (beyond self-loop)
-        deg_mask = (A0.sum(axis=1) > 1)
-        if not np.any(deg_mask):
-            continue
-        eligible += deg_mask.astype(np.int64)
-
-        # Cumulative product kernel
-        path = A0.copy()
-        prev_diag = np.diag(path).copy()
-        recorded = np.zeros(M, dtype=bool)  # ensure one hit max per (node, τ)
-
-        max_L = min(max_latency, T - start_time)
-        for latency in range(1, max_L):
-            path = path @ adj[start_time + latency]
-            new_diag = np.diag(path)
-
-            hit = (new_diag > prev_diag) & (~recorded) & deg_mask
-            if np.any(hit):
-                lat_val = latency + 1  # keep your convention
-                sum_latency[hit] += lat_val
-                count_hits[hit]  += 1
-                np.minimum(min_latency[hit], lat_val, out=min_latency[hit])
-                recorded[hit] = True
-
-                # Optional early exit: when every eligible node for this τ has hit
-                if recorded[deg_mask].all():
-                    break
-
-            prev_diag = new_diag
-
-    # Nodewise aggregates
-    nodewise_mean_latency = np.full(M, np.nan, dtype=float)
-    hit_mask = count_hits > 0
-    nodewise_mean_latency[hit_mask] = sum_latency[hit_mask] / count_hits[hit_mask]
-
-    nodewise_min_latency = min_latency.copy()
-    nodewise_min_latency[~hit_mask] = np.nan
-
-    nodewise_rate = np.full(M, np.nan, dtype=float)
-    elig_mask = eligible > 0
-    nodewise_rate[elig_mask] = count_hits[elig_mask] / eligible[elig_mask]
-
-    # Global summaries
-    latency_mean  = float(np.nanmean(nodewise_mean_latency))
-    latency_std   = float(np.nanstd(nodewise_mean_latency))
-    latency_median = float(np.nanmedian(nodewise_mean_latency))
-    latency_summary = _summarize_scores(nodewise_mean_latency, summary_stat=summary_stat)
-
-    rate_nodewise_mean = float(np.nanmean(nodewise_rate))
-    total_hits = int(count_hits.sum())
-    total_eligible = int(eligible.sum())
-    rate_overall = float(total_hits / total_eligible) if total_eligible > 0 else np.nan
-
-    mean_hits_per_node = float(count_hits.mean())
-
-    if not return_full:
-        return {
-            'latency_median': latency_median,
-            'latency_summary': float(latency_summary),
-            'summary_stat': summary_stat,
-            'latency_mean': latency_mean,
-            'latency_std': latency_std,
-            'rate_nodewise_mean': rate_nodewise_mean,
-            'rate_overall': rate_overall,
-            'mean_hits_per_node': mean_hits_per_node
-        }
-
-    return {
-        'latency_median': latency_median,
-        'latency_summary': float(latency_summary),
-        'summary_stat': summary_stat,
-        'latency_mean': latency_mean,
-        'latency_std': latency_std,
-        'rate_nodewise_mean': rate_nodewise_mean,
-        'rate_overall': rate_overall,
-        'mean_hits_per_node': mean_hits_per_node,
-        'active_nodes': active_nodes,
-        'nodewise_mean_latency': nodewise_mean_latency,
-        'nodewise_min_latency': nodewise_min_latency,
-        'nodewise_hits': count_hits,
-        'nodewise_eligible': eligible,
-        'nodewise_rate': nodewise_rate
-    }
-
-
-def _ComputeCirculationLatencyMultiHop(adjacency_matrices, max_latency,
+def _ComputeReturnLatencyMultiHop(adjacency_matrices, max_latency,
                                       return_full, summary_stat,
                                       hops_per_frame, latency_unit):
     """Find first non-waiting returns, allowing several steps in each frame."""
@@ -650,7 +495,64 @@ def _ComputeCirculationLatencyMultiHop(adjacency_matrices, max_latency,
     }
 
 
-def ComputeCirculationLatency(
+@njit(cache=True)
+def _ReturnFirstReturns(packed, n_nodes, max_latency):
+    """Find first non-waiting returns without counting all possible walks."""
+    n_frames, _, n_words = packed.shape
+    minimum = np.full(n_nodes, np.inf)
+    totals = np.zeros(n_nodes, dtype=np.float64)
+    counts = np.zeros(n_nodes, dtype=np.int64)
+    for start in range(n_frames - 1):
+        reach = packed[start].copy()
+        pending = np.zeros(n_nodes, dtype=np.bool_)
+        remaining = 0
+        for source in range(n_nodes):
+            bit = np.uint64(1) << np.uint64(source % 64)
+            reach[source, source // 64] &= ~bit
+            for word in range(n_words):
+                if reach[source, word]:
+                    pending[source] = True
+                    remaining += 1
+                    break
+        if remaining == 0:
+            continue
+        for latency in range(1, min(max_latency, n_frames - start)):
+            frame = start + latency
+            for source in range(n_nodes):
+                if not pending[source]:
+                    continue
+                source_word = source // 64
+                source_bit = np.uint64(1) << np.uint64(source % 64)
+                returned = False
+                # Check for a return before expanding the reachable set.
+                for node in range(n_nodes):
+                    bit = np.uint64(1) << np.uint64(node % 64)
+                    if (reach[source, node // 64] & bit) and (packed[frame, node, source_word] & source_bit):
+                        returned = True
+                        break
+                if returned:
+                    distance = float(latency + 1)
+                    totals[source] += distance
+                    counts[source] += 1
+                    minimum[source] = min(minimum[source], distance)
+                    pending[source] = False
+                    remaining -= 1
+                    continue
+                # Also allow paths that wait at the source before departing.
+                next_row = packed[frame, source].copy()
+                next_row[source_word] &= ~source_bit
+                for node in range(n_nodes):
+                    bit = np.uint64(1) << np.uint64(node % 64)
+                    if reach[source, node // 64] & bit:
+                        for word in range(n_words):
+                            next_row[word] |= packed[frame, node, word]
+                reach[source] = next_row
+            if remaining == 0:
+                break
+    return minimum, totals, counts
+
+
+def ComputeReturnLatency(
     adjacency_matrices,
     max_latency=None,
     return_full=False,
@@ -659,7 +561,7 @@ def ComputeCirculationLatency(
     latency_unit="frames",
 ):
     """
-    Compute node-wise circulation latency in a temporal network (vectorized).
+    Compute node-wise return latency; one-hop searches use packed reachability.
 
     Args:
         adjacency_matrices: array, shape (T, N, N). Sequence of adjacency matrices (binary, 0/1), with waiting (diagonal ones).
@@ -673,9 +575,9 @@ def ComputeCirculationLatency(
         If `return_full` is False, `(summary_latency, mean_count_hits)`. If `return_full` is True, a dict with nodewise arrays plus global mean, std, median, and requested summary latency.
     """
 
-    _ValidateMultiHopInputs(adjacency_matrices, hops_per_frame, latency_unit)
+    network = _ValidateMultiHopInputs(adjacency_matrices, hops_per_frame, latency_unit)
     if hops_per_frame > 1:
-        return _ComputeCirculationLatencyMultiHop(
+        return _ComputeReturnLatencyMultiHop(
             adjacency_matrices, max_latency, return_full, summary_stat,
             hops_per_frame, latency_unit,
         )
@@ -683,65 +585,28 @@ def ComputeCirculationLatency(
     T, N, _ = adjacency_matrices.shape
     if max_latency is None:
         max_latency = T
+    if isinstance(max_latency, bool) or not isinstance(max_latency, (int, np.integer)) or max_latency < 1:
+        raise ValueError("max_latency must be a positive integer number of frames.")
 
-    # Active nodes (same criterion as your original)
+    # Nodes with at least one successful return.
     node_activity = adjacency_matrices.sum(axis=(0, 1)) + adjacency_matrices.sum(axis=(0, 2))
     active_nodes = np.where(node_activity > 0)[0]
     n_active = len(active_nodes)
     if n_active == 0:
         raise ValueError("No active nodes in the temporal network.")
 
-    # Trim, binarize, force diag=1 (waiting)
-    adj = (adjacency_matrices[:, active_nodes][:, :, active_nodes] > 0).astype(np.int64)
-    for t in range(T):
-        np.fill_diagonal(adj[t], 1)
-
-    # N-length accumulators (memory O(N) instead of O(N*T))
-    min_latency   = np.full(n_active, np.inf, dtype=float)
-    sum_latency   = np.zeros(n_active, dtype=float)
-    count_hits    = np.zeros(n_active, dtype=np.int64)
-
-    # Iterate start times; vectorized across nodes
-    for start_time in range(T - 1):
-        A0 = adj[start_time]
-
-        # Nodes with only waiting at start_time cannot circulate
-        deg_mask = (A0.sum(axis=1) > 1)
-        if not np.any(deg_mask):
-            continue
-
-        path = A0.copy()
-        prev_diag = np.diag(path).copy()
-        recorded = np.zeros(n_active, dtype=bool)  # ensure only the first latency per (node, start_time)
-
-        max_L = min(max_latency, T - start_time)
-        for latency in range(1, max_L):
-            path = path @ adj[start_time + latency]
-            new_diag = np.diag(path)
-
-            hit = (new_diag > prev_diag) & (~recorded) & deg_mask
-            if np.any(hit):
-                lat_val = latency + 1  
-                # Update accumulators
-                sum_latency[hit] += lat_val
-                count_hits[hit]  += 1
-                # Shortest seen latency per node
-                np.minimum(min_latency[hit], lat_val, out=min_latency[hit])
-                # Prevent double counting at this start_time for those nodes
-                recorded[hit] = True
-
-            # Early exit if all eligible nodes got a first return
-            if recorded[deg_mask].all():
-                break
-
-            prev_diag = new_diag
+    adj = network if n_active == N else network[:, active_nodes][:, :, active_nodes]
+    packed = _PackTemporalNeighbors(adj)
+    min_latency, sum_latency, count_hits = _ReturnFirstReturns(
+        packed, n_active, max_latency
+    )
 
     # Nodewise means (NaN where no hits)
     nodewise_mean_latency = np.full(n_active, np.nan, dtype=float)
     nonzero = count_hits > 0
     nodewise_mean_latency[nonzero] = sum_latency[nonzero] / count_hits[nonzero]
 
-    # Global summaries from the per-node *mean* latencies (matches previous behavior)
+    # Global summaries from per-node mean latencies.
     global_mean_latency = np.nanmean(nodewise_mean_latency)
     global_std_latency  = np.nanstd(nodewise_mean_latency)
     global_median_latency = np.nanmedian(nodewise_mean_latency)
@@ -768,20 +633,8 @@ def ComputeCirculationLatency(
         return global_summary_latency, float(np.mean(count_hits))
 
 
-
-
-
-
-def LatencyMatrixAnalysis(dmtx, penalty):
-    """
-    Summarize a temporal distance matrix with the five-value latency schema.
-
-    Args:
-        dmtx: np.ndarray, shape (N, N). Matrix of minimal distances between nodes, with infinity for unreachable pairs.
-        penalty: float. Replacement value used for unreachable pairs when computing resistance.
-
-    Returns:
-        stats: list[float]. [impermeability, latency, resistance, inaccessibility, irrigation]
-    """
-    return MeanLatencyMatrixAnalysis(dmtx, penalty)
+# Alternative function names supported as aliases.
+ComputeCirculationLatency = ComputeReturnLatency
+_ComputeCirculationLatencyMultiHop = _ComputeReturnLatencyMultiHop
+_CirculationFirstReturns = _ReturnFirstReturns
     

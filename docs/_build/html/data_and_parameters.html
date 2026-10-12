@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Inputs and time parameters &#8212; tnet_analysis 1.0.2 User Guide</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=12dfc556" />
+    <script src="_static/documentation_options.js?v=1ed6394b"></script>
+    <script src="_static/doctools.js?v=9a2dae69"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Signals, FC and null models" href="workflows.html" />
+    <link rel="prev" title="Installation and first analysis" href="getting_started.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="inputs-and-time-parameters">
+<h1>Inputs and time parameters<a class="headerlink" href="#inputs-and-time-parameters" title="Link to this heading">¶</a></h1>
+<section id="shapes-and-conventions">
+<h2>Shapes and conventions<a class="headerlink" href="#shapes-and-conventions" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>One subject’s signals: <code class="docutils literal notranslate"><span class="pre">(L,</span> <span class="pre">N)</span></code> — samples, nodes.</p></li>
+<li><p>Connectivity or adjacency: <code class="docutils literal notranslate"><span class="pre">(T,</span> <span class="pre">N,</span> <span class="pre">N)</span></code> — frames, nodes, nodes.</p></li>
+<li><p>One snapshot: <code class="docutils literal notranslate"><span class="pre">(N,</span> <span class="pre">N)</span></code>.</p></li>
+<li><p>Subject batches: <code class="docutils literal notranslate"><span class="pre">(subjects,</span> <span class="pre">L,</span> <span class="pre">N)</span></code>; analyze individual subjects unless
+the runner explicitly supports batching.</p></li>
+</ul>
+<p>Move the time axis before passing a <code class="docutils literal notranslate"><span class="pre">(nodes,</span> <span class="pre">nodes,</span> <span class="pre">frames)</span></code> tensor.
+Most measures assume symmetric, undirected frames. Not every function
+validates every assumption: check finite values, symmetry and binary
+edge values. Signed FC is not a binary adjacency tensor.</p>
+<p>Structure measures should receive zero diagonals. Smart and random walkers
+force waiting diagonals internally. Give return latency a waiting-diagonal
+network. Give <code class="docutils literal notranslate"><span class="pre">ComputeDynamism</span></code> diagonal ones too: its edge-count
+calculation subtracts one self-entry per node per frame. Its other five
+components use off-diagonal edges.</p>
+<p>Average degree counts neighbors, not weighted strength. Modularity and
+participation support nonnegative weights. Directed modularity scoring
+requires supplied labels and <code class="docutils literal notranslate"><span class="pre">directed=True</span></code>; automatic Louvain detection
+is undirected. This does not imply directed support for other measures.</p>
+</section>
+<section id="window-and-lag">
+<h2>Window and lag<a class="headerlink" href="#window-and-lag" title="Link to this heading">¶</a></h2>
+<p>For Pearson FC, <code class="docutils literal notranslate"><span class="pre">window</span></code> counts signal samples; <code class="docutils literal notranslate"><span class="pre">lag</span></code> is the step
+between window starts. The dispatch function defaults to 20 and 1.
+The lower-level Pearson function requires both arguments.
+Use positive integers, at least two samples per correlation window and
+a recording longer than the window.</p>
+<p>This implementation returns <code class="docutils literal notranslate"><span class="pre">int((L-window)/lag)</span></code> Pearson frames.
+It does not add an endpoint window: 60 samples, window 20 and lag 5 yield
+eight frames, not nine. Instantaneous FC yields one frame per signal sample,
+ignoring window and lag.</p>
+<p>Neighborhood memory’s lag counts <strong>adjacency frames</strong>. Partner diversity’s
+<code class="docutils literal notranslate"><span class="pre">window_size</span></code> groups adjacency frames, independently of the FC window.</p>
+</section>
+<section id="hops-and-latency-units">
+<h2>Hops and latency units<a class="headerlink" href="#hops-and-latency-units" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">hops_per_frame=1</span></code> is the default. Larger values permit multiple substeps
+in each frame. Smart propagation explores reachability; a random walk
+selects one available neighbor, including waiting, at each substep.</p>
+<p>For first arrival at substep s with hop allowance h:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">latency_unit=&quot;frames&quot;</span></code> returns ceil(s/h).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;frame_fraction&quot;</span></code> returns s/h.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;substeps&quot;</span></code> returns s.</p></li>
+</ul>
+<p>Substeps include waiting, not just non-self edge traversals. Fractional-frame
+timing is a model convention, not measured within-frame physical timing.</p>
+<div class="highlight-pycon notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span><span class="w"> </span><span class="nn">tnet_analysis.latency_measures</span><span class="w"> </span><span class="kn">import</span> <span class="n">SmartWalker</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">snapshot</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">]])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">network</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">snapshot</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:,</span> <span class="p">:],</span> <span class="mi">3</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">SmartWalker</span><span class="p">(</span><span class="n">network</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="go">2.0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">SmartWalker</span><span class="p">(</span><span class="n">network</span><span class="p">,</span> <span class="n">hops_per_frame</span><span class="o">=</span><span class="mi">2</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="go">1.0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">SmartWalker</span><span class="p">(</span><span class="n">network</span><span class="p">,</span> <span class="n">hops_per_frame</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">latency_unit</span><span class="o">=</span><span class="s2">"substeps"</span><span class="p">)[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span>
+<span class="go">2.0</span>
+</pre></div>
+</div>
+</section>
+<section id="lifetime-and-search-limits">
+<h2>Lifetime and search limits<a class="headerlink" href="#lifetime-and-search-limits" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ComputeTemporalClustering(delta=1)</span></code> uses consecutive central connections
+with closure in the second frame. At larger delta, central connections can
+be separated by up to delta frames; closure is accepted from the second
+connection’s frame through delta-1 frames later. Each eligible triplet is
+counted once, even with repeated closing edges. Recording boundaries truncate
+closure windows without wrapping.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ComputeRetention(delta=None)</span></code> considers all past frames. A positive delta
+restricts history to max(0,t-delta) through t-1. Current contacts cannot be
+their own history. The first nonempty observation is excluded. Later
+nonempty frames can score zero when all earlier contacts expire; empty
+neighborhoods are skipped.</p>
+<p>Return latency’s <code class="docutils literal notranslate"><span class="pre">max_latency</span></code> limits the <strong>frames</strong> searched from each
+start, even with multiple hops. It defaults to the recording horizon.
+Shortening it changes the estimate, not just runtime.</p>
+</section>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">Temporal Network Analysis Toolkit</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Installation and first analysis</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Inputs and time parameters</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#shapes-and-conventions">Shapes and conventions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#window-and-lag">Window and lag</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#hops-and-latency-units">Hops and latency units</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#lifetime-and-search-limits">Lifetime and search limits</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="workflows.html">Signals, FC and null models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="measures.html">Choosing and interpreting measures</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output layouts and summaries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Parallel computation and troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+</ul>
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2026, tnet_analysis contributors.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 7.4.7</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/data_and_parameters.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

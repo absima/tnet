@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="./">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Temporal-network user guide &#8212; tnet_analysis 1.0.2 User Guide</title>
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="_static/alabaster.css?v=12dfc556" />
+    <script src="_static/documentation_options.js?v=1ed6394b"></script>
+    <script src="_static/doctools.js?v=9a2dae69"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Installation and first analysis" href="getting_started.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <section id="temporal-network-user-guide">
+<h1>Temporal-network user guide<a class="headerlink" href="#temporal-network-user-guide" title="Link to this heading">¶</a></h1>
+<p>This guide explains how to build temporal networks, choose measures and
+interpret outputs with <strong>tnet_analysis 1.0.2</strong>. Start with small examples
+before scaling to many nodes, frames or subjects.</p>
+<p>The workflow is: signals (optional) → connectivity (optional) → binary
+network frames → measures. Synthetic networks can enter at the network stage.
+All examples use generated data and need no external dataset.</p>
+<p>Offline reading: <a class="reference download internal" download="" href="_downloads/66c5c511c41d94a9041749e4d66f6b2f/tnet_analysis-1.0.2-user-guide.pdf"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">the</span> <span class="pre">PDF</span> <span class="pre">user</span> <span class="pre">guide</span></code></a>.</p>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Installation and first analysis</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="getting_started.html#install">Install</a></li>
+<li class="toctree-l2"><a class="reference internal" href="getting_started.html#first-network">First network</a></li>
+<li class="toctree-l2"><a class="reference internal" href="getting_started.html#build-and-browse">Build and browse</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="data_and_parameters.html">Inputs and time parameters</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="data_and_parameters.html#shapes-and-conventions">Shapes and conventions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_and_parameters.html#window-and-lag">Window and lag</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_and_parameters.html#hops-and-latency-units">Hops and latency units</a></li>
+<li class="toctree-l2"><a class="reference internal" href="data_and_parameters.html#lifetime-and-search-limits">Lifetime and search limits</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="workflows.html">Signals, FC and null models</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="workflows.html#methods-versus-tags">Methods versus tags</a></li>
+<li class="toctree-l2"><a class="reference internal" href="workflows.html#complete-signal-workflow">Complete signal workflow</a></li>
+<li class="toctree-l2"><a class="reference internal" href="workflows.html#thresholding">Thresholding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="workflows.html#all-supported-analysis-tags">All supported analysis tags</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="measures.html">Choosing and interpreting measures</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="measures.html#distance-and-integration">Distance and integration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="measures.html#return-latency-and-retention">Return latency and retention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="measures.html#dynamism-and-memory">Dynamism and memory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="measures.html#clustering-partners-and-communities">Clustering, partners and communities</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output layouts and summaries</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#distance-matrices">Distance matrices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#distance-vectors">Distance vectors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#dynamism-order">Dynamism order</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#node-score-summaries">Node-score summaries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#nan-infinity-and-padding">NaN, infinity and padding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="outputs.html#aliases">Aliases</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Parallel computation and troubleshooting</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="performance.html#start-small">Start small</a></li>
+<li class="toctree-l2"><a class="reference internal" href="performance.html#process-worker-example">Process-worker example</a></li>
+<li class="toctree-l2"><a class="reference internal" href="performance.html#scratch-and-checkpointing">Scratch and checkpointing</a></li>
+<li class="toctree-l2"><a class="reference internal" href="performance.html#common-problems">Common problems</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.dfc_to_tnet">Connectivity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.analysis_preparation">Preparation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.signal_surrogates">Surrogates</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.latency_measures">Distance and return</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.dynamism_and_memory">Dynamism and memory</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.segregation_and_cohesion">Structure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.modularity_estimates">Modularity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api.html#module-tnet_analysis.network_generators">Network generators</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<p>The toolbox is distributed under the MIT license. Docstrings specify accepted
+inputs; this guide adds workflow and interpretation advice.</p>
+</section>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="#">Temporal Network Analysis Toolkit</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="getting_started.html">Installation and first analysis</a></li>
+<li class="toctree-l1"><a class="reference internal" href="data_and_parameters.html">Inputs and time parameters</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflows.html">Signals, FC and null models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="measures.html">Choosing and interpreting measures</a></li>
+<li class="toctree-l1"><a class="reference internal" href="outputs.html">Output layouts and summaries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="performance.html">Parallel computation and troubleshooting</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">API reference</a></li>
+</ul>
+
+
+<search id="searchbox" style="display: none" role="search">
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Search"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &#169;2026, tnet_analysis contributors.
+      
+      |
+      Powered by <a href="https://www.sphinx-doc.org/">Sphinx 7.4.7</a>
+      &amp; <a href="https://alabaster.readthedocs.io">Alabaster 0.7.16</a>
+      
+      |
+      <a href="_sources/index.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

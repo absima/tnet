@@ -1,0 +1,11 @@
+include README.md requirements.txt LICENSE pyproject.toml .readthedocs.yaml
+recursive-include image *.png
+recursive-include tnet_analysis *.py
+recursive-include tests *.py *.txt
+recursive-include docs *.rst *.py
+include output/pdf/tnet_analysis-1.0.2-user-guide.pdf
+prune docs/_build
+global-exclude .DS_Store *.py[cod] *.nbc *.nbi
+prune build
+prune dist
+prune data
