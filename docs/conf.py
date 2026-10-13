@@ -14,7 +14,7 @@ release = next(ast.literal_eval(item.value) for item in setup_call.keywords
 version = release
 project = "Temporal Network Analysis Toolkit"
 author = "Simachew Mengiste (with Demian Battaglia)"
-copyright = "2026, tnet_analysis contributors"
+copyright = "2026, Simachew Mengiste"
 extensions = ["sphinx.ext.autodoc", "sphinx.ext.napoleon",
               "sphinx.ext.doctest", "sphinx.ext.mathjax"]
 html_theme = "alabaster"
